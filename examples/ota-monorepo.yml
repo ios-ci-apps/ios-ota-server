@@ -1,0 +1,46 @@
+# A monorepo whose ios/ folder holds one Xcode project with a scheme per app.
+# Put in the repository as .github/workflows/ota.yml. After CI succeeds on main, each app is rebuilt only
+# when its own folder or the shared code changed since its newest build on the install page.
+# A manual run (Run workflow) rebuilds every app, for example before a free-team profile expires.
+name: OTA
+
+on:
+  workflow_run:
+    workflows: [CI]          # the name of the repository's CI workflow
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ota
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push') }}
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false       # one app failing does not stop the others
+      max-parallel: 1        # one Mac runner; apps build one after another
+      matrix:
+        app:
+          - { scheme: AppA, slug: app-a, name: "App A", paths: "ios/AppA ios/Shared ios/MyApps.xcodeproj" }
+          - { scheme: AppB, slug: app-b, name: "App B", paths: "ios/AppB ios/Shared ios/MyApps.xcodeproj" }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0     # the change check compares with the last published commit
+      - uses: your-org/ios-ota-server@<commit>
+        with:
+          project-dir: ios
+          scheme: ${{ matrix.app.scheme }}
+          slug: ${{ matrix.app.slug }}
+          name: ${{ matrix.app.name }}
+          paths: ${{ matrix.app.paths }}
+          force: ${{ github.event_name == 'workflow_dispatch' }}
+          sha: ${{ github.event.workflow_run.head_sha || github.sha }}

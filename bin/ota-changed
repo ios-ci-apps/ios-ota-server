@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Decides whether an app needs a new build: compares the commit of its newest version on the OTA site
+# with HEAD, limited to the given paths. Prints "true" (build) or "false" (skip) on stdout, the reason on stderr.
+# Builds when the app has no version yet, or when that commit is not in this checkout's history
+# (use actions/checkout with fetch-depth: 0).
+#
+# Usage: ota-changed --slug <app> [--repo <dir>] [--config <file>] -- <path> [<path> ...]
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/config.sh source-path=SCRIPTDIR/..
+source "$ROOT/lib/config.sh"
+
+slug="" repo="$PWD"
+while (($#)); do
+    case "$1" in
+        --slug) slug="$2"; shift 2 ;;
+        --repo) repo="$2"; shift 2 ;;
+        --config) export OTA_CONFIG="$2"; shift 2 ;;
+        --) shift; break ;;
+        -h|--help) sed -n '2,7p' "$0"; exit 0 ;;
+        *) ota_die "unknown argument $1" ;;
+    esac
+done
+[[ -n "$slug" ]] || ota_die "--slug is required"
+(($#)) || ota_die "give at least one path after --"
+
+ota_load_config
+ota_require OTA_RSYNC_DEST
+dest="${OTA_RSYNC_DEST%/}"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/mirror"
+# Only this app's metadata. A missing app folder is not an error: the app was never published.
+ota_rsync -m --include="/$slug/" --include="/$slug/*/" --include="/$slug/*/meta.json" --exclude='*' \
+    "$dest/" "$work/mirror/" 2>/dev/null || true
+
+last="$(python3 "$ROOT/lib/ota_tools.py" latest-sha --root "$work/mirror" --slug "$slug")"
+decide() { echo "ota: $slug: $2" >&2; echo "$1"; }
+
+if [[ -z "$last" || "$last" == unknown ]]; then
+    decide true "no published version yet"
+elif ! git -C "$repo" cat-file -e "$last^{commit}" 2>/dev/null; then
+    decide true "last published commit ${last:0:7} is not in this checkout's history"
+elif git -C "$repo" diff --quiet "$last" HEAD -- "$@"; then
+    decide false "unchanged since ${last:0:7} in: $*"
+else
+    decide true "changed since ${last:0:7} in: $*"
+fi

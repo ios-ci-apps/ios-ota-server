@@ -19,6 +19,8 @@ jobs:
           fetch-depth: 0
       - name: ShellCheck
         run: shellcheck -x bin/* lib/config.sh tests/run.sh
+      - name: action.yml parses
+        run: python3 -c "import yaml; yaml.safe_load(open('action.yml'))"
       - name: Python syntax
         run: python3 -m py_compile lib/ota_tools.py
       - name: Tests

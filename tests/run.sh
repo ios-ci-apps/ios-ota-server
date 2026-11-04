@@ -66,5 +66,30 @@ echo 'rm -rf / # $(touch pwned)' > "$work/evil.conf"
 check "config file is not executed" '! OTA_CONFIG="$work/evil.conf" "$ROOT/bin/ota-publish" --ipa "$work/demo3.ipa" --slug demo 2> /dev/null && [[ ! -e pwned ]]'
 check "environment overrides the config file" 'OTA_KEEP_VERSIONS=1 "$ROOT/bin/ota-publish" --ipa "$work/demo3.ipa" --slug demo --sha abcdef3000 > /dev/null && [[ "$(find "$site/demo" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ]]'
 
+# ota-changed: rebuild only when the app's paths changed since its newest published commit.
+repo="$work/repo"
+mkdir -p "$repo/apps/demo" "$repo/apps/other" "$repo/shared"
+git -C "$repo" init -q
+git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+echo a > "$repo/apps/demo/a.swift"; echo o > "$repo/apps/other/o.swift"; echo s > "$repo/shared/s.swift"
+git -C "$repo" add -A && git -C "$repo" -c user.name=t -c user.email=t@t commit -q -m one
+first="$(git -C "$repo" rev-parse HEAD)"
+changed_site="$work/changed-site"
+mkdir -p "$changed_site"
+OTA_RSYNC_DEST="$changed_site" "$ROOT/bin/ota-publish" --ipa "$work/demo3.ipa" --slug demo --sha "$first" > /dev/null
+changed() { OTA_RSYNC_DEST="$changed_site" "$ROOT/bin/ota-changed" --repo "$repo" "$@" 2> /dev/null; }
+check "unchanged paths skip the build" '[[ "$(changed --slug demo -- apps/demo shared)" == false ]]'
+echo b > "$repo/apps/other/o.swift"
+git -C "$repo" -c user.name=t -c user.email=t@t commit -q -am "other app only"
+check "a change in another app skips the build" '[[ "$(changed --slug demo -- apps/demo shared)" == false ]]'
+echo t > "$repo/shared/s.swift"
+git -C "$repo" -c user.name=t -c user.email=t@t commit -q -am "shared code"
+check "a change in a shared path builds" '[[ "$(changed --slug demo -- apps/demo shared)" == true ]]'
+check "an app never published builds" '[[ "$(changed --slug newapp -- apps/demo)" == true ]]'
+OTA_RSYNC_DEST="$changed_site" "$ROOT/bin/ota-publish" --ipa "$work/other.ipa" --slug other --sha 0123456789abcdef0123456789abcdef01234567 > /dev/null
+check "a commit missing from history builds" '[[ "$(changed --slug other -- apps/other)" == true ]]'
+check "ota-changed needs a path" '! changed --slug demo'
+check "a slug starting with a dot is refused" '! "$ROOT/bin/ota-publish" --ipa "$work/demo3.ipa" --slug ".hidden" 2> /dev/null'
+
 if ((fails)); then echo "$fails test(s) failed"; exit 1; fi
 echo "all tests passed"
