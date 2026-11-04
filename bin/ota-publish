@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Uploads an IPA to the OTA site: stages it with manifest.plist and meta.json, uploads it,
+# removes versions beyond OTA_KEEP_VERSIONS and re-renders index.html.
+#
+# Usage: ota-publish --ipa <path> --slug <app> [--name <display name>] [--sha <commit>] [--ref <ref>] [--config <file>]
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/config.sh source-path=SCRIPTDIR/..
+source "$ROOT/lib/config.sh"
+
+ipa="" slug="" name="" sha="" ref=""
+while (($#)); do
+    case "$1" in
+        --ipa) ipa="$2"; shift 2 ;;
+        --slug) slug="$2"; shift 2 ;;
+        --name) name="$2"; shift 2 ;;
+        --sha) sha="$2"; shift 2 ;;
+        --ref) ref="$2"; shift 2 ;;
+        --config) export OTA_CONFIG="$2"; shift 2 ;;
+        -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
+        *) ota_die "unknown argument $1" ;;
+    esac
+done
+[[ -f "$ipa" ]] || ota_die "--ipa must point to an .ipa file"
+[[ -n "$slug" ]] || ota_die "--slug is required"
+
+ota_load_config
+ota_require OTA_BASE_URL OTA_RSYNC_DEST
+[[ "$OTA_BASE_URL" == https://* ]] || ota_die "OTA_BASE_URL must start with https:// (iOS refuses OTA over http)"
+[[ "$OTA_KEEP_VERSIONS" =~ ^[1-9][0-9]*$ ]] || ota_die "OTA_KEEP_VERSIONS must be a positive number"
+dest="${OTA_RSYNC_DEST%/}"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/stage" "$work/mirror" "$work/empty"
+
+rel_dir="$(python3 "$ROOT/lib/ota_tools.py" prepare --ipa "$ipa" --slug "$slug" --out "$work/stage" \
+    --base-url "$OTA_BASE_URL" --display-name "$name" --sha "$sha" --ref "$ref" \
+    --profile-days "$OTA_PROFILE_DAYS")"
+echo "ota: uploading $rel_dir"
+ota_rsync "$work/stage/" "$dest/"
+
+# Fetch only the metadata of every version to decide what to prune and what to list.
+ota_rsync -m --include='*/' --include='meta.json' --exclude='*' "$dest/" "$work/mirror/"
+
+while IFS= read -r old; do
+    [[ -n "$old" ]] || continue
+    app="${old%%/*}" version="${old#*/}"
+    echo "ota: removing old version $old"
+    # Syncing an empty directory with --delete removes only what the include rules select;
+    # excluded paths are protected, so other versions stay.
+    ota_rsync --delete --include="/$version/" --include="/$version/**" --exclude='*' "$work/empty/" "$dest/$app/"
+    rm -rf "${work:?}/mirror/$old"
+done < <(python3 "$ROOT/lib/ota_tools.py" prune --root "$work/mirror" --keep "$OTA_KEEP_VERSIONS")
+
+python3 "$ROOT/lib/ota_tools.py" index --root "$work/mirror" --base-url "$OTA_BASE_URL" --output "$work/index.html"
+ota_rsync "$work/index.html" "$dest/index.html"
+
+echo "ota: published ${OTA_BASE_URL%/}/$rel_dir"
+echo "ota: install page ${OTA_BASE_URL%/}/"
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    {
+        echo "### OTA build published"
+        echo "- App: \`$slug\` → \`$rel_dir\`"
+        echo "- Install page: ${OTA_BASE_URL%/}/ (open on the iPhone with Tailscale on)"
+    } >> "$GITHUB_STEP_SUMMARY"
+fi
