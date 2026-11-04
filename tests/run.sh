@@ -66,5 +66,26 @@ echo 'rm -rf / # $(touch pwned)' > "$work/evil.conf"
 check "config file is not executed" '! OTA_CONFIG="$work/evil.conf" "$ROOT/bin/ota-publish" --ipa "$work/demo3.ipa" --slug demo 2> /dev/null && [[ ! -e pwned ]]'
 check "environment overrides the config file" 'OTA_KEEP_VERSIONS=1 "$ROOT/bin/ota-publish" --ipa "$work/demo3.ipa" --slug demo --sha abcdef3000 > /dev/null && [[ "$(find "$site/demo" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ]]'
 
+# Keychain unlock: a fake `security` records its arguments; the password must not reach the output.
+fakebin="$work/fakebin"
+mkdir -p "$fakebin"
+cat > "$fakebin/security" <<'FAKE'
+#!/usr/bin/env bash
+echo "$*" >> "$SECURITY_LOG"
+[[ "$3" == right-password ]]
+FAKE
+chmod +x "$fakebin/security"
+export SECURITY_LOG="$work/security.log"
+unlock() { PATH="$fakebin:$PATH" bash -c 'source "$1/lib/config.sh"; ota_unlock_keychain' _ "$ROOT"; }
+printf 'right-password\n' > "$work/kc.pw"; chmod 600 "$work/kc.pw"
+check "no setting, no unlock" 'OTA_KEYCHAIN_PASSWORD_FILE= unlock 2> /dev/null && [[ ! -e "$SECURITY_LOG" ]]'
+check "unlocks the given keychain" 'OTA_KEYCHAIN_PASSWORD_FILE="$work/kc.pw" OTA_KEYCHAIN=/k.db unlock > "$work/unlock.out" 2>&1 && grep -qx "unlock-keychain -p right-password /k.db" "$SECURITY_LOG"'
+check "the password is not printed" '! grep -q right-password "$work/unlock.out"'
+chmod 644 "$work/kc.pw"
+check "a password file others can read is refused" '! OTA_KEYCHAIN_PASSWORD_FILE="$work/kc.pw" unlock 2> "$work/err" && grep -q "chmod 600" "$work/err"'
+printf 'wrong\n' > "$work/kc.pw"; chmod 600 "$work/kc.pw"
+check "a wrong password fails clearly" '! OTA_KEYCHAIN_PASSWORD_FILE="$work/kc.pw" unlock 2> "$work/err" && grep -q "could not unlock" "$work/err" && ! grep -q wrong "$work/err"'
+check "the setting is accepted in ota.conf" 'printf "OTA_BASE_URL=https://x\nOTA_RSYNC_DEST=%s\nOTA_KEYCHAIN_PASSWORD_FILE=%s\n" "$site" "$work/kc.pw" > "$work/kc.conf" && OTA_CONFIG="$work/kc.conf" "$ROOT/bin/ota-publish" --ipa "$work/demo3.ipa" --slug demo > /dev/null'
+
 if ((fails)); then echo "$fails test(s) failed"; exit 1; fi
 echo "all tests passed"
