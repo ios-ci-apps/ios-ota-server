@@ -32,5 +32,12 @@ OTA_KEEP_VERSIONS=10
 # release-testing (Ad Hoc, paid Apple Developer Program).
 OTA_EXPORT_METHOD=debugging
 
+# Unlock the signing keychain before each build. Set this when CI fails at CodeSign with
+# errSecInternalComponent: a runner service can find the login keychain locked.
+# The file holds the runner user's login password and must be chmod 600.
+#OTA_KEYCHAIN_PASSWORD_FILE=~/.config/ios-ota/keychain.password
+# Keychain to unlock; defaults to the runner user's login keychain.
+#OTA_KEYCHAIN=~/Library/Keychains/login.keychain-db
+
 # Used for the expiry date only when the IPA carries no provisioning profile.
 OTA_PROFILE_DAYS=7

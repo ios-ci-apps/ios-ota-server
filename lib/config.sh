@@ -3,7 +3,7 @@
 # then ~/.config/ios-ota/ota.conf. Nothing host- or account-specific lives in the repository.
 
 OTA_KNOWN_KEYS=(OTA_BASE_URL OTA_RSYNC_DEST OTA_RSYNC_BIN OTA_RSYNC_PASSWORD_FILE OTA_SSH_KEY OTA_SSH_PORT
-    OTA_KEEP_VERSIONS OTA_TEAM_ID OTA_EXPORT_METHOD OTA_PROFILE_DAYS)
+    OTA_KEEP_VERSIONS OTA_TEAM_ID OTA_EXPORT_METHOD OTA_PROFILE_DAYS OTA_KEYCHAIN_PASSWORD_FILE OTA_KEYCHAIN)
 
 ota_die() {
     echo "ota: $*" >&2
@@ -62,4 +62,23 @@ ota_rsync() {
         args+=(-e "$ssh_cmd")
     fi
     "$OTA_RSYNC_BIN" "${args[@]}" "$@"
+}
+
+# Unlocks the signing keychain before a build. A runner started as a LaunchAgent can find the login
+# keychain locked (after sleep, an idle timeout, or a session it did not start), and codesign then fails
+# with errSecInternalComponent. Only runs when OTA_KEYCHAIN_PASSWORD_FILE is set. The file must be
+# readable by its owner only; the password is never printed.
+ota_unlock_keychain() {
+    [[ -n "${OTA_KEYCHAIN_PASSWORD_FILE:-}" ]] || return 0
+    local file="$OTA_KEYCHAIN_PASSWORD_FILE"
+    local keychain="${OTA_KEYCHAIN:-$HOME/Library/Keychains/login.keychain-db}"
+    local mode password
+    [[ -f "$file" && -r "$file" ]] || ota_die "OTA_KEYCHAIN_PASSWORD_FILE ($file) is not a readable file"
+    mode="$(stat -f %Lp "$file" 2>/dev/null || stat -c %a "$file")"
+    [[ "$mode" =~ 00$ ]] || ota_die "$file is readable by others (mode $mode); run: chmod 600 \"$file\""
+    password="$(< "$file")"
+    [[ -n "$password" ]] || ota_die "$file is empty"
+    security unlock-keychain -p "$password" "$keychain" > /dev/null 2>&1 \
+        || ota_die "could not unlock $keychain; check the password in $file"
+    echo "ota: unlocked $(basename "$keychain")" >&2
 }

@@ -65,7 +65,20 @@ cp ota.conf.example ~/.config/ios-ota/ota.conf
 chmod 600 ~/.config/ios-ota/ota.conf
 ```
 
-Fill in `OTA_BASE_URL` and `OTA_RSYNC_DEST`. For the rsync service, also fill in `OTA_RSYNC_PASSWORD_FILE` and put the password in that file (`chmod 600`).
+Fill in `OTA_BASE_URL` and `OTA_RSYNC_DEST`.
+
+**Signing from the runner service.** The runner runs as a LaunchAgent, and it can find the login keychain locked: after sleep, after an idle timeout, or when the session was not started at the desktop. `codesign` then fails with `errSecInternalComponent`, even though the same archive works in Terminal. To fix it, let the build unlock the keychain itself:
+
+```bash
+printf '%s' '<runner user login password>' > ~/.config/ios-ota/keychain.password && chmod 600 ~/.config/ios-ota/keychain.password
+```
+
+Then add `OTA_KEYCHAIN_PASSWORD_FILE=~/.config/ios-ota/keychain.password` to `ota.conf`. Once, also allow Apple's signing tools to use the key without a prompt:
+
+```bash
+security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k '<runner user login password>' ~/Library/Keychains/login.keychain-db
+```
+ For the rsync service, also fill in `OTA_RSYNC_PASSWORD_FILE` and put the password in that file (`chmod 600`).
 Environment variables with the same names override the file. That lets a workflow pass them from repository or organization *Variables* and *Secrets* instead.
 
 ### 3. App repository
@@ -97,6 +110,8 @@ tests/run.sh                                # end-to-end test of ota-publish aga
 | `OTA_TEAM_ID` | | project setting | Apple team that signs |
 | `OTA_EXPORT_METHOD` | | `debugging` | `release-testing` for Ad Hoc |
 | `OTA_PROFILE_DAYS` | | `7` | expiry shown when the IPA has no profile |
+| `OTA_KEYCHAIN_PASSWORD_FILE` | | | file with the runner user's login password (chmod 600); unlocks the keychain before each build |
+| `OTA_KEYCHAIN` | | login keychain | keychain to unlock |
 
 ## Security notes
 
