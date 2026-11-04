@@ -16,6 +16,8 @@ Mac runner ──rsync (LAN)──▶ NAS
 - **Nothing updates by itself.** A build only shows up on the page. The phone installs it only when you tap **Install**. Older versions stay listed, so you can roll back.
 - **No secrets in this repository.** Hosts, accounts, team IDs and keys come from a config file on the runner, or from environment variables.
 
+Something not working? See [TROUBLESHOOTING.md](TROUBLESHOOTING.md): every error met so far with its fix, where each secret lives, and what to update when a password changes.
+
 ## Requirements
 
 - A Mac with Xcode that runs a GitHub Actions self-hosted runner. The runner must run inside a logged-in user session (a LaunchAgent), so that signing can use that user's keychain.

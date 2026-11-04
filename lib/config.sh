@@ -79,6 +79,6 @@ ota_unlock_keychain() {
     password="$(< "$file")"
     [[ -n "$password" ]] || ota_die "$file is empty"
     security unlock-keychain -p "$password" "$keychain" > /dev/null 2>&1 \
-        || ota_die "could not unlock $keychain; check the password in $file"
+        || ota_die "could not unlock $keychain; check the password in $file (TROUBLESHOOTING.md: Changing a password)"
     echo "ota: unlocked $(basename "$keychain")" >&2
 }
