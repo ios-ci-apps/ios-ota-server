@@ -1,0 +1,43 @@
+name: iOS OTA deploy
+description: Archive an iOS app, export a signed IPA and publish it to a private OTA install page.
+inputs:
+  project-dir:
+    description: Directory that holds ota.json and the Xcode project.
+    default: "."
+  slug:
+    description: Short app id used in URLs (letters, digits, '.', '_', '-').
+    required: true
+  name:
+    description: Display name on the install page. Defaults to the app's name.
+    default: ""
+  sha:
+    description: Commit the build comes from.
+    default: ${{ github.sha }}
+  config:
+    description: Path to an ota.conf on the runner. Defaults to ~/.config/ios-ota/ota.conf. OTA_* environment variables win.
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Build IPA
+      id: build
+      shell: bash
+      env:
+        OTA_CONFIG: ${{ inputs.config }}
+        INPUT_PROJECT_DIR: ${{ inputs.project-dir }}
+      run: |
+        [[ -n "$OTA_CONFIG" ]] || unset OTA_CONFIG
+        ipa="$("$GITHUB_ACTION_PATH/bin/ota-build" --project-dir "$INPUT_PROJECT_DIR" | tail -n 1)"
+        echo "ipa=$ipa" >> "$GITHUB_OUTPUT"
+    - name: Publish
+      shell: bash
+      env:
+        OTA_CONFIG: ${{ inputs.config }}
+        INPUT_SLUG: ${{ inputs.slug }}
+        INPUT_NAME: ${{ inputs.name }}
+        INPUT_SHA: ${{ inputs.sha }}
+        BUILT_IPA: ${{ steps.build.outputs.ipa }}
+      run: |
+        [[ -n "$OTA_CONFIG" ]] || unset OTA_CONFIG
+        "$GITHUB_ACTION_PATH/bin/ota-publish" --ipa "$BUILT_IPA" \
+          --slug "$INPUT_SLUG" --name "$INPUT_NAME" --sha "$INPUT_SHA" --ref "$GITHUB_REF_NAME"

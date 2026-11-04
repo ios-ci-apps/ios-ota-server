@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Archives an iOS app and exports a signed IPA for OTA install. macOS with Xcode only.
+# Reads ota.json in the project directory (see examples/ota.json).
+#
+# Usage: ota-build [--project-dir <dir>] [--output <dir>] [--config <file>]
+# Prints the path of the exported .ipa on the last line of stdout.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/config.sh source-path=SCRIPTDIR/..
+source "$ROOT/lib/config.sh"
+
+project_dir="$PWD" output=""
+while (($#)); do
+    case "$1" in
+        --project-dir) project_dir="$2"; shift 2 ;;
+        --output) output="$2"; shift 2 ;;
+        --config) export OTA_CONFIG="$2"; shift 2 ;;
+        -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
+        *) ota_die "unknown argument $1" ;;
+    esac
+done
+[[ "$(uname)" == Darwin ]] || ota_die "ota-build needs macOS with Xcode"
+project_dir="$(cd "$project_dir" && pwd)"
+[[ -f "$project_dir/ota.json" ]] || ota_die "no ota.json in $project_dir"
+ota_load_config
+
+json() {
+    python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2], ""); print(v)' "$project_dir/ota.json" "$1"
+}
+scheme="$(json scheme)"
+project="$(json project)"
+workspace="$(json workspace)"
+configuration="$(json configuration)"
+: "${configuration:=Release}"
+[[ -n "$scheme" ]] || ota_die "ota.json needs \"scheme\""
+
+output="${output:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ota-build}"
+rm -rf "$output"
+mkdir -p "$output"
+archive="$output/App.xcarchive"
+export_dir="$output/export"
+
+cd "$project_dir"
+if [[ -f project.yml ]] && command -v xcodegen >/dev/null; then
+    xcodegen generate --quiet >&2
+fi
+
+container=()
+if [[ -n "$workspace" ]]; then container=(-workspace "$workspace")
+elif [[ -n "$project" ]]; then container=(-project "$project")
+fi
+
+signing=(-allowProvisioningUpdates)
+[[ -n "${OTA_TEAM_ID:-}" ]] && signing+=("DEVELOPMENT_TEAM=$OTA_TEAM_ID")
+
+echo "ota: archiving $scheme ($configuration)" >&2
+xcodebuild archive "${container[@]}" -scheme "$scheme" -configuration "$configuration" \
+    -destination 'generic/platform=iOS' -archivePath "$archive" "${signing[@]}" -quiet >&2
+
+options="$output/ExportOptions.plist"
+sed -e "s|__METHOD__|$OTA_EXPORT_METHOD|" -e "s|__TEAM_ID__|${OTA_TEAM_ID:-}|" \
+    "$ROOT/templates/ExportOptions.plist" > "$options"
+[[ -n "${OTA_TEAM_ID:-}" ]] || /usr/libexec/PlistBuddy -c 'Delete :teamID' "$options"
+
+echo "ota: exporting IPA (method $OTA_EXPORT_METHOD)" >&2
+if ! xcodebuild -exportArchive -archivePath "$archive" -exportPath "$export_dir" \
+    -exportOptionsPlist "$options" -allowProvisioningUpdates -quiet >&2; then
+    # A free (personal) team may refuse to export. The archived app is already signed with the
+    # development profile that lists the registered devices, so package it as an IPA directly.
+    echo "ota: export failed; packaging the archived app instead" >&2
+    app="$(find "$archive/Products/Applications" -maxdepth 1 -name '*.app' | head -n 1)"
+    [[ -n "$app" ]] || ota_die "no .app in the archive"
+    mkdir -p "$export_dir/Payload"
+    cp -R "$app" "$export_dir/Payload/"
+    (cd "$export_dir" && /usr/bin/ditto -c -k --sequesterRsrc --keepParent Payload "$scheme.ipa")
+fi
+
+ipa="$(find "$export_dir" -maxdepth 1 -name '*.ipa' | head -n 1)"
+[[ -n "$ipa" ]] || ota_die "no .ipa produced"
+echo "$ipa"

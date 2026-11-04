@@ -1,0 +1,32 @@
+# Put in the app repository as .github/workflows/ota.yml.
+# Publishes the latest build after CI succeeds on main. Installing stays manual: nothing reaches
+# the phone until you tap Install on the page.
+name: OTA
+
+on:
+  workflow_run:
+    workflows: [CI]          # the name of the app's CI workflow
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:         # rebuild by hand, e.g. before a free-team profile expires
+
+concurrency:
+  group: ota
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: your-org/ios-ota-server@v1
+        with:
+          slug: myapp
+          sha: ${{ github.event.workflow_run.head_sha || github.sha }}

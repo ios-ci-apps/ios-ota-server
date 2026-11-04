@@ -1,0 +1,5 @@
+ota.conf
+*.password
+*.ipa
+*.xcarchive
+.DS_Store
