@@ -20,10 +20,10 @@ Something not working? See [TROUBLESHOOTING.md](TROUBLESHOOTING.md): every error
 
 ## Requirements
 
-- A Mac with Xcode that runs a GitHub Actions self-hosted runner. The runner must run inside a logged-in user session (a LaunchAgent), so that signing can use that user's keychain.
-- In that user's Xcode: signed in to the Apple ID whose team signs the app, and the iPhone connected once so its UDID is registered.
+- A Mac with Xcode that runs a GitHub Actions self-hosted runner, installed as a service (`svc.sh install`, a LaunchAgent).
+- An Apple ID with a developer team. A free personal team works (see below).
 - A NAS that can run Tailscale and serve static files. These steps use Synology DSM 7.
-- Homebrew `rsync` on the Mac is recommended (`brew install rsync`). macOS ships openrsync.
+- An iPhone with Tailscale, in the same tailnet as the NAS.
 
 ### Free vs paid Apple developer account
 
@@ -35,53 +35,85 @@ Something not working? See [TROUBLESHOOTING.md](TROUBLESHOOTING.md): every error
 | Apps per device | 3 at a time | no limit |
 
 With a free team, `ota-build` first tries `xcodebuild -exportArchive`. If that is refused, it packages the archived app, which is already signed with the development profile, as an IPA.
-**Try one install by hand before you rely on it.** The page shows each build's profile expiry. Rebuild with *Run workflow* before it expires, then install over the existing app. Do not delete the app first, or its data is lost.
+A free team's OTA builds open once the phone knows the runner user's certificate (Runner Mac, step 5). The page shows each build's profile expiry. Rebuild with *Run workflow* before it expires, then install over the existing app. Do not delete the app first, or its data is lost.
 
 ## Setup
 
+Do the steps in this order. Each one is checked before the next: run `bin/ota-doctor` on the runner Mac after step 2, and fix anything it marks with ✘ first. The fixes are in [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
 ### 1. NAS (Synology)
 
-1. **Package Center → Tailscale.** Install it and sign in to the tailnet your iPhone uses. In the Tailscale admin console, enable **MagicDNS** and **HTTPS Certificates**.
-2. **Shared folder `ios-ota`** with a subfolder `www`. Create a user `ota-uploader` with read/write access to that folder only.
-3. **Upload access.** Choose one:
-   - *rsync service* (recommended, no shell account): **Control Panel → File Services → rsync → Enable rsync service** and **Edit rsync account** for `ota-uploader`. Then create a module, or use the shared folder name. The destination is `rsync://ota-uploader@<nas>.local/ios-ota/www`.
-   - *SSH*: the destination is `ota-uploader@<nas>.local:/volume1/ios-ota/www`. Install the runner user's public key.
-4. **Web Station.** Serve `/volume1/ios-ota/www` as a static site on a local port, for example `8088`.
-5. Over SSH on the NAS, as an admin:
+1. **Tailscale.** Package Center → Tailscale. Sign in to the tailnet your iPhone uses. In the Tailscale admin console (DNS page), turn on **MagicDNS** and **HTTPS Certificates**.
+2. **Folder and upload user.**
+   - Create the shared folder `ios-ota` with a subfolder `www`.
+   - Create a user `ota-uploader` with read/write access to that folder only.
+   - Under the folder's Permissions, switch the list to **Local groups** and give the group **`http`** read-only access. That is the web server; it is not listed under *System internal user*.
+3. **SSH for uploads.**
+   - Control Panel → Terminal & SNMP → enable SSH.
+   - Control Panel → User & Group → Advanced → enable the user home service.
+   - Step 2 of *Runner Mac* installs the key.
+
+   SSH is the default. The Synology rsync service (`rsync://`) is supported too, but it refused every account in testing with `account system disabled`.
+4. **Web Station.**
+   - Web Station → Web Service → Create → *Static website*, with the document root `ios-ota/www`.
+   - Web Station → Web Portal → Create. Pick that service, set the portal type to **port-based** and HTTP to `8088`. Leave the host name empty. If HTTPS cannot be empty, enter an unused port such as `8443`; it is never used.
+   - A host-based portal answers `404` to everything Tailscale forwards.
+   - Check it on the NAS. `404` is fine before the first publish; `403` means the `http` group cannot read the folder.
+     ```bash
+     curl -I http://127.0.0.1:8088/
+     ```
+5. **Tailscale serve.** Over SSH on the NAS, as an admin:
    ```bash
    sudo tailscale serve --bg --https=443 http://127.0.0.1:8088
    ```
-   Do **not** enable Funnel. Do not forward ports on your router.
-6. On the iPhone, install Tailscale, then open `https://<nas>.<tailnet>.ts.net/` in Safari. The certificate must be valid. iOS refuses OTA without a trusted HTTPS certificate.
+   ```bash
+   sudo tailscale serve status
+   ```
+   The second command prints the page's address, `https://<nas>.<tailnet>.ts.net`. Rename the machine in the Tailscale admin console *before* this step if you want a different name.
+
+   Do **not** enable Funnel, and do not forward ports on your router.
+6. **Check from the iPhone.** Turn Tailscale on and open the address in Safari. The certificate must be valid; iOS refuses OTA without a trusted HTTPS certificate. Test from a device in the **same tailnet**: a Mac signed in to another Tailscale account cannot reach it.
 
 ### 2. Runner Mac
 
-As the user that runs the GitHub runner:
+Do all of this **logged in as the macOS user the GitHub runner runs as**. Its keychain, Xcode account, SSH key and settings are per user.
 
-```bash
-mkdir -p ~/.config/ios-ota
-cp ota.conf.example ~/.config/ios-ota/ota.conf
-```
+1. **Tools.**
+   ```bash
+   brew install rsync
+   ```
+   Only the user who owns Homebrew can install. If that is another user, run it there (`su - <owner>`); every user can then run `/opt/homebrew/bin/rsync`. macOS's own rsync (openrsync) is not enough.
+2. **SSH key for the NAS.**
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/ota_uploader -N "" -C "ota-runner"
+   ```
+   ```bash
+   ssh-copy-id -i ~/.ssh/ota_uploader.pub ota-uploader@<nas>.local
+   ```
+   DSM may refuse SSH logins from non-administrators. If `ssh-copy-id` says `Permission denied`, install the key as an administrator instead (TROUBLESHOOTING.md, *Upload*).
+3. **Settings.**
+   ```bash
+   mkdir -p ~/.config/ios-ota && cp ota.conf.example ~/.config/ios-ota/ota.conf && chmod 600 ~/.config/ios-ota/ota.conf
+   ```
+   Fill in `OTA_BASE_URL` with the address from step 1.5 and `OTA_RSYNC_DEST`. The other defaults match this setup. Environment variables with the same names override the file, so a workflow can also pass them from repository or organisation *Variables* and *Secrets*.
+4. **Signing.** A runner service can find the login keychain locked, and `codesign` then fails with `errSecInternalComponent`. Let each build unlock it:
+   ```bash
+   printf '%s' '<runner user login password>' > ~/.config/ios-ota/keychain.password && chmod 600 ~/.config/ios-ota/keychain.password
+   ```
+   ```bash
+   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k '<runner user login password>' ~/Library/Keychains/login.keychain-db
+   ```
+   When this password changes, see TROUBLESHOOTING.md, *Changing a password*.
+5. **Xcode, once per app.**
+   - Xcode → Settings → Accounts: sign in with the Apple ID of the signing team.
+   - Connect the iPhone, open the app's project and press **Run** once.
 
-```bash
-chmod 600 ~/.config/ios-ota/ota.conf
-```
-
-Fill in `OTA_BASE_URL` and `OTA_RSYNC_DEST`.
-
-**Signing from the runner service.** The runner runs as a LaunchAgent, and it can find the login keychain locked: after sleep, after an idle timeout, or when the session was not started at the desktop. `codesign` then fails with `errSecInternalComponent`, even though the same archive works in Terminal. To fix it, let the build unlock the keychain itself:
-
-```bash
-printf '%s' '<runner user login password>' > ~/.config/ios-ota/keychain.password && chmod 600 ~/.config/ios-ota/keychain.password
-```
-
-Then add `OTA_KEYCHAIN_PASSWORD_FILE=~/.config/ios-ota/keychain.password` to `ota.conf`. Once, also allow Apple's signing tools to use the key without a prompt:
-
-```bash
-security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k '<runner user login password>' ~/Library/Keychains/login.keychain-db
-```
- For the rsync service, also fill in `OTA_RSYNC_PASSWORD_FILE` and put the password in that file (`chmod 600`).
-Environment variables with the same names override the file. That lets a workflow pass them from repository or organization *Variables* and *Secrets* instead.
+   This registers the phone and sets up this user's certificate. Without it, OTA builds install but close at once (`AppleMobileFileIntegrityError -400`). Each macOS user has its own certificate, even under the same Apple ID.
+6. **Check.** From a clone of this repository:
+   ```bash
+   bin/ota-doctor
+   ```
+   Every line should be ✔. Fix any ✘ before the first build.
 
 ### 3. App repository
 
@@ -92,9 +124,10 @@ Environment variables with the same names override the file. That lets a workflo
 ## Commands
 
 ```bash
+bin/ota-doctor [--skip-upload] [--skip-signing] [--skip-page]   # checks the setup, layer by layer
 bin/ota-build --project-dir path/to/app     # macOS; prints the IPA path on the last line
 bin/ota-publish --ipa App.ipa --slug myapp [--name "My App"] [--sha <commit>] [--ref main]
-tests/run.sh                                # end-to-end test of ota-publish against a local folder
+tests/run.sh                                # end-to-end tests against a local folder
 ```
 
 `ota-publish` uploads a new version, keeps the newest `OTA_KEEP_VERSIONS` per app (default 10), and re-renders `index.html` from every version's `meta.json`.

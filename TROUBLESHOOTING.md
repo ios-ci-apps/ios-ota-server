@@ -2,6 +2,8 @@
 
 Problems met while setting this up, each with the message you see and the fix. Search this page for the error text.
 
+Start with `bin/ota-doctor` on the runner Mac, as the runner user. It checks the settings, the upload to the NAS, signing and the install page, and names the layer that is broken. The OTA action runs it before every build.
+
 - [Where each secret lives](#where-each-secret-lives)
 - [Changing a password](#changing-a-password)
 - [Install page (NAS, Tailscale)](#install-page-nas-tailscale)

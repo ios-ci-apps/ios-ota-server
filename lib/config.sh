@@ -55,9 +55,10 @@ ota_rsync() {
     # shellcheck disable=SC2054 # the commas belong to the --chmod value
     local args=(-rlt --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r)
     if [[ "$OTA_RSYNC_DEST" == rsync://* ]]; then
+        args+=(--contimeout=15)
         [[ -n "${OTA_RSYNC_PASSWORD_FILE:-}" ]] && args+=(--password-file="$OTA_RSYNC_PASSWORD_FILE")
     elif [[ "$OTA_RSYNC_DEST" == *:* ]]; then
-        local ssh_cmd="ssh -p $OTA_SSH_PORT -o BatchMode=yes"
+        local ssh_cmd="ssh -p $OTA_SSH_PORT -o BatchMode=yes -o ConnectTimeout=15"
         [[ -n "${OTA_SSH_KEY:-}" ]] && ssh_cmd+=" -i $OTA_SSH_KEY -o IdentitiesOnly=yes"
         args+=(-e "$ssh_cmd")
     fi
