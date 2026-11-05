@@ -18,6 +18,13 @@ Mac runner ──rsync (LAN)──▶ NAS
 
 Something not working? See [TROUBLESHOOTING.md](TROUBLESHOOTING.md): every error met so far with its fix, where each secret lives, and what to update when a password changes.
 
+## Using Claude Code
+
+The repository carries two [Claude Code skills](.claude/skills/) that lead the setup step by step, check each step, and know the pitfalls listed in TROUBLESHOOTING.md:
+
+- **`ota-setup`**: first-time setup of the NAS, Tailscale, the upload and signing on the runner Mac. Ask *"set up OTA"*.
+- **`ota-add-app`**: connect an app repository or a monorepo to OTA. Ask *"add <repo> to OTA"*.
+
 ## Requirements
 
 - A Mac with Xcode that runs a GitHub Actions self-hosted runner, installed as a service (`svc.sh install`, a LaunchAgent).
