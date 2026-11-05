@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Archives an iOS app and exports a signed IPA for OTA install. macOS with Xcode only.
-# Reads ota.json in the project directory (see examples/ota.json).
+# Reads ota.json in the project directory (see examples/ota.json). --scheme overrides its "scheme";
+# with --scheme, ota.json is optional and xcodebuild finds the project in the directory itself.
 #
-# Usage: ota-build [--project-dir <dir>] [--output <dir>] [--config <file>]
+# Usage: ota-build [--project-dir <dir>] [--scheme <scheme>] [--output <dir>] [--config <file>]
 # Prints the path of the exported .ipa on the last line of stdout.
 set -euo pipefail
 
@@ -10,10 +11,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/config.sh source-path=SCRIPTDIR/..
 source "$ROOT/lib/config.sh"
 
-project_dir="$PWD" output=""
+project_dir="$PWD" output="" scheme_arg=""
 while (($#)); do
     case "$1" in
         --project-dir) project_dir="$2"; shift 2 ;;
+        --scheme) scheme_arg="$2"; shift 2 ;;
         --output) output="$2"; shift 2 ;;
         --config) export OTA_CONFIG="$2"; shift 2 ;;
         -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
@@ -22,18 +24,19 @@ while (($#)); do
 done
 [[ "$(uname)" == Darwin ]] || ota_die "ota-build needs macOS with Xcode"
 project_dir="$(cd "$project_dir" && pwd)"
-[[ -f "$project_dir/ota.json" ]] || ota_die "no ota.json in $project_dir"
+[[ -f "$project_dir/ota.json" || -n "$scheme_arg" ]] || ota_die "no ota.json in $project_dir and no --scheme"
 ota_load_config
 
 json() {
+    [[ -f "$project_dir/ota.json" ]] || return 0
     python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get(sys.argv[2], ""); print(v)' "$project_dir/ota.json" "$1"
 }
-scheme="$(json scheme)"
+scheme="${scheme_arg:-$(json scheme)}"
 project="$(json project)"
 workspace="$(json workspace)"
 configuration="$(json configuration)"
 : "${configuration:=Release}"
-[[ -n "$scheme" ]] || ota_die "ota.json needs \"scheme\""
+[[ -n "$scheme" ]] || ota_die "no scheme: pass --scheme or set \"scheme\" in ota.json"
 
 output="${output:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ota-build}"
 rm -rf "$output"

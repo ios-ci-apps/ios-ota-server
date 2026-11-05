@@ -2,10 +2,13 @@ name: iOS OTA deploy
 description: Archive an iOS app, export a signed IPA and publish it to a private OTA install page.
 inputs:
   project-dir:
-    description: Directory that holds ota.json and the Xcode project.
+    description: Directory that holds the Xcode project (and ota.json, if used).
     default: "."
+  scheme:
+    description: Scheme to build. Overrides "scheme" in ota.json; with it, ota.json is optional. Use one per app in a monorepo.
+    default: ""
   slug:
-    description: Short app id used in URLs (letters, digits, '.', '_', '-').
+    description: Short app id used in URLs (letters, digits, '.', '_', '-'). One per app.
     required: true
   name:
     description: Display name on the install page. Defaults to the app's name.
@@ -13,13 +16,46 @@ inputs:
   sha:
     description: Commit the build comes from.
     default: ${{ github.sha }}
+  paths:
+    description: >
+      Rebuild only when these paths (space or newline separated, relative to the repository root) changed
+      since this app's newest published build. Empty means always rebuild. Needs actions/checkout with fetch-depth 0.
+    default: ""
+  force:
+    description: Set to "true" to rebuild even when nothing in paths changed (for example on a manual run).
+    default: "false"
   config:
     description: Path to an ota.conf on the runner. Defaults to ~/.config/ios-ota/ota.conf. OTA_* environment variables win.
     default: ""
+outputs:
+  published:
+    description: '"true" when a new build was published, "false" when it was skipped because nothing changed.'
+    value: ${{ steps.changed.outputs.build }}
 runs:
   using: composite
   steps:
+    - name: Check for changes
+      id: changed
+      shell: bash
+      env:
+        OTA_CONFIG: ${{ inputs.config }}
+        INPUT_SLUG: ${{ inputs.slug }}
+        INPUT_PATHS: ${{ inputs.paths }}
+        INPUT_FORCE: ${{ inputs.force }}
+      run: |
+        [[ -n "$OTA_CONFIG" ]] || unset OTA_CONFIG
+        if [[ ! "$INPUT_SLUG" =~ ^[A-Za-z0-9._-]+$ || "$INPUT_SLUG" == .* ]]; then
+          echo "::error::slug '$INPUT_SLUG' may only contain letters, digits, '.', '_' and '-', and may not start with '.'"
+          exit 1
+        fi
+        read -r -d '' -a paths <<< "$INPUT_PATHS" || true
+        if [[ "$INPUT_FORCE" == true || ${#paths[@]} -eq 0 ]]; then
+          echo "build=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "build=$("$GITHUB_ACTION_PATH/bin/ota-changed" --slug "$INPUT_SLUG" -- "${paths[@]}")" >> "$GITHUB_OUTPUT"
+        fi
     - name: Check setup
+      if: steps.changed.outputs.build == 'true'
       shell: bash
       env:
         OTA_CONFIG: ${{ inputs.config }}
@@ -29,15 +65,23 @@ runs:
         "$GITHUB_ACTION_PATH/bin/ota-doctor" --skip-page
     - name: Build IPA
       id: build
+      if: steps.changed.outputs.build == 'true'
       shell: bash
       env:
         OTA_CONFIG: ${{ inputs.config }}
         INPUT_PROJECT_DIR: ${{ inputs.project-dir }}
+        INPUT_SCHEME: ${{ inputs.scheme }}
+        INPUT_SLUG: ${{ inputs.slug }}
       run: |
         [[ -n "$OTA_CONFIG" ]] || unset OTA_CONFIG
-        ipa="$("$GITHUB_ACTION_PATH/bin/ota-build" --project-dir "$INPUT_PROJECT_DIR" | tail -n 1)"
+        args=(--project-dir "$INPUT_PROJECT_DIR")
+        [[ -n "$INPUT_SCHEME" ]] && args+=(--scheme "$INPUT_SCHEME")
+        # Each app gets its own build folder, so several apps can build in one job.
+        args+=(--output "${RUNNER_TEMP:-/tmp}/ota-build-$INPUT_SLUG")
+        ipa="$("$GITHUB_ACTION_PATH/bin/ota-build" "${args[@]}" | tail -n 1)"
         echo "ipa=$ipa" >> "$GITHUB_OUTPUT"
     - name: Publish
+      if: steps.changed.outputs.build == 'true'
       shell: bash
       env:
         OTA_CONFIG: ${{ inputs.config }}
@@ -49,3 +93,10 @@ runs:
         [[ -n "$OTA_CONFIG" ]] || unset OTA_CONFIG
         "$GITHUB_ACTION_PATH/bin/ota-publish" --ipa "$BUILT_IPA" \
           --slug "$INPUT_SLUG" --name "$INPUT_NAME" --sha "$INPUT_SHA" --ref "$GITHUB_REF_NAME"
+    - name: Skipped
+      if: steps.changed.outputs.build == 'false'
+      shell: bash
+      env:
+        INPUT_SLUG: ${{ inputs.slug }}
+      run: |
+        echo "### OTA: \`$INPUT_SLUG\` unchanged, no new build" >> "$GITHUB_STEP_SUMMARY"

@@ -31,6 +31,8 @@ jobs:
           fi
       - name: ShellCheck
         run: shellcheck -x bin/* lib/config.sh tests/run.sh
+      - name: action.yml parses
+        run: python3 -c "import yaml; yaml.safe_load(open('action.yml'))"
       - name: Skills have front matter
         run: |
           python3 - <<'PY'

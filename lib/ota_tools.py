@@ -80,7 +80,7 @@ def version_dir_name(meta: dict) -> str:
 
 def cmd_prepare(args: argparse.Namespace) -> None:
     """Build <out>/<slug>/<version dir>/ with the IPA, manifest.plist and meta.json; print the relative dir."""
-    if not SAFE_NAME.fullmatch(args.slug):
+    if not SAFE_NAME.fullmatch(args.slug) or args.slug.startswith("."):
         fail(f"app slug '{args.slug}' may only contain letters, digits, '.', '_' and '-'")
     ipa_path = Path(args.ipa)
     meta = read_ipa(ipa_path)
@@ -143,6 +143,13 @@ def cmd_prune(args: argparse.Namespace) -> None:
     for versions in load_metas(Path(args.root)).values():
         for meta in versions[args.keep :]:
             print(meta["dir"])
+
+
+def cmd_latest_sha(args: argparse.Namespace) -> None:
+    """Print the commit of the app's newest published version, or nothing if it has none."""
+    versions = load_metas(Path(args.root)).get(args.slug, [])
+    if versions:
+        print(versions[0].get("sha", ""))
 
 
 def install_link(base: str, rel_dir: str) -> str:
@@ -225,6 +232,11 @@ def main() -> None:
     prune.add_argument("--root", required=True)
     prune.add_argument("--keep", type=int, required=True)
     prune.set_defaults(func=cmd_prune)
+
+    latest = sub.add_parser("latest-sha", help="print the commit of an app's newest published version")
+    latest.add_argument("--root", required=True)
+    latest.add_argument("--slug", required=True)
+    latest.set_defaults(func=cmd_latest_sha)
 
     index = sub.add_parser("index", help="render index.html from every meta.json under --root")
     index.add_argument("--root", required=True)

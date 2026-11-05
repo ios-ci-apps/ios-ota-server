@@ -128,12 +128,22 @@ Do all of this **logged in as the macOS user the GitHub runner runs as**. Its ke
 2. Add the workflow [`examples/ota.yml`](examples/ota.yml) as `.github/workflows/ota.yml`. Set `workflows:` to the name of your CI workflow and choose a `slug`.
 3. If this repository is private, allow other repositories in the organization to use its action: **Settings → Actions → General → Access**.
 
+### Monorepo: several apps in one Xcode project
+
+Run the action once per app with a matrix, giving each its `scheme` and `slug`. `ota.json` is then optional. Add `paths` so an app is rebuilt only when its files changed. See [`examples/ota-monorepo.yml`](examples/ota-monorepo.yml).
+
+- **`scheme`** overrides `"scheme"` in `ota.json`. Without `ota.json`, `xcodebuild` finds the project in `project-dir` itself.
+- **`paths`** lists folders or files relative to the repository root, separated by spaces or new lines: the app's own folder, shared code, and the project file. The action reads the commit of the app's newest version on the install page. If none of `paths` changed between that commit and the one being built, the app is skipped (output `published=false`). It always builds when the app has no version yet, or when that commit is missing from the checkout, so use `fetch-depth: 0`.
+- **`force: true`** rebuilds anyway. The example sets it on manual runs, so *Run workflow* renews every app.
+- Every app needs its own bundle identifier. With a free team, a device holds at most 3 such apps at a time.
+
 ## Commands
 
 ```bash
 bin/ota-doctor [--skip-upload] [--skip-signing] [--skip-page]   # checks the setup, layer by layer
-bin/ota-build --project-dir path/to/app     # macOS; prints the IPA path on the last line
+bin/ota-build --project-dir path/to/app [--scheme MyApp]   # macOS; prints the IPA path on the last line
 bin/ota-publish --ipa App.ipa --slug myapp [--name "My App"] [--sha <commit>] [--ref main]
+bin/ota-changed --slug myapp -- apps/MyApp Shared         # prints true (rebuild) or false (unchanged)
 tests/run.sh                                # end-to-end tests against a local folder
 ```
 
