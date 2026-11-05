@@ -6,21 +6,20 @@
 # With Tailscale on the NAS: https://<nas-machine-name>.<your-tailnet>.ts.net
 OTA_BASE_URL=https://nas.example-tailnet.ts.net
 
-# Where the site files are uploaded. Either over SSH:
-#   OTA_RSYNC_DEST=ota-uploader@nas.local:/volume1/ios-ota/www
-# or to the Synology rsync service (no shell account needed):
-#   OTA_RSYNC_DEST=rsync://ota-uploader@nas.local/ios-ota/www
-OTA_RSYNC_DEST=rsync://ota-uploader@nas.local/ios-ota/www
-
-# rsync service only: file with the rsync account's password (chmod 600).
-OTA_RSYNC_PASSWORD_FILE=~/.config/ios-ota/rsync.password
-
-# SSH only: private key and port.
-#OTA_SSH_KEY=~/.ssh/ota_uploader
+# Where the site files are uploaded, over SSH (the default and tested setup):
+OTA_RSYNC_DEST=ota-uploader@nas.local:/volume1/ios-ota/www
+# SSH private key and port.
+OTA_SSH_KEY=~/.ssh/ota_uploader
 #OTA_SSH_PORT=22
 
-# rsync binary. macOS ships openrsync; Homebrew's rsync is recommended (brew install rsync).
-#OTA_RSYNC_BIN=/opt/homebrew/bin/rsync
+# Alternative: the Synology rsync service. It refused every account in testing
+# ("account system disabled"), so prefer SSH.
+#OTA_RSYNC_DEST=rsync://ota-uploader@nas.local/ios-ota/www
+#OTA_RSYNC_PASSWORD_FILE=~/.config/ios-ota/rsync.password
+
+# rsync binary. macOS's own rsync (openrsync) is not enough: brew install rsync.
+# Use /usr/local/bin/rsync on an Intel Mac.
+OTA_RSYNC_BIN=/opt/homebrew/bin/rsync
 
 # Versions kept per app on the server.
 OTA_KEEP_VERSIONS=10
@@ -32,10 +31,10 @@ OTA_KEEP_VERSIONS=10
 # release-testing (Ad Hoc, paid Apple Developer Program).
 OTA_EXPORT_METHOD=debugging
 
-# Unlock the signing keychain before each build. Set this when CI fails at CodeSign with
-# errSecInternalComponent: a runner service can find the login keychain locked.
-# The file holds the runner user's login password and must be chmod 600.
-#OTA_KEYCHAIN_PASSWORD_FILE=~/.config/ios-ota/keychain.password
+# Unlock the signing keychain before each build. A runner service can find the login keychain
+# locked, and codesign then fails with errSecInternalComponent.
+# The file holds the runner user's login password and must be chmod 600 (README, Runner Mac step 4).
+OTA_KEYCHAIN_PASSWORD_FILE=~/.config/ios-ota/keychain.password
 # Keychain to unlock; defaults to the runner user's login keychain.
 #OTA_KEYCHAIN=~/Library/Keychains/login.keychain-db
 
