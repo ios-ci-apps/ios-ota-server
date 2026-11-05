@@ -20,7 +20,7 @@ Read these from the app repository, and ask only for what you cannot read:
   - Where the `.xcodeproj` or `.xcworkspace` lives (`project-dir`).
   - Which scheme builds each app.
   - Whether `project.yml` (XcodeGen) exists; the action generates the project when `xcodegen` is installed.
-  - If the repository already has a setup action that selects Xcode, reuse it before the OTA step, as CycleCompanion does with `prepare-ios`.
+  - If the repository already has a setup action that selects Xcode, reuse it before the OTA step (for example a local `./.github/actions/<setup>` action), so the archive uses the same Xcode as CI.
 - **Bundle IDs.** Each app needs its own bundle ID; two apps with the same one replace each other on the phone.
 - **Version keys.** If the project uses XcodeGen with an `info:` block, `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` must be set. Otherwise the app ships with no version, and the page lists it as `0-0-<sha>`.
 - **Free team limits.** A free team allows 3 apps on a phone at a time and 10 new App IDs per 7 days. Say so when a monorepo adds more.
@@ -49,7 +49,7 @@ git ls-remote https://github.com/ios-ci-apps/ios-ota-server refs/heads/main
 - **Slugs:** each app gets its own slug. Letters, digits, `.`, `_` and `-`, not starting with `.`. It becomes the folder name on the NAS.
 - **`paths`:** list the app's own folder, the shared code it uses and the project file. A change to shared code that is missing from `paths` won't rebuild the app.
 
-Record the decision the way the repository expects; for example, CycleCompanion wants an ADR for each workflow change.
+Record the decision the way the repository expects, for example as an ADR or a changelog entry if its contributing rules ask for one.
 
 ## 3. After the PR merges
 

@@ -17,6 +17,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Checks only this repository's own CI workflows (.github/workflows/ here).
+      # This repository is meant to be public, and a public repository's workflows must never run on a
+      # self-hosted runner: anyone could open a pull request that runs code on that machine.
+      # The action itself (action.yml) and the templates in examples/ ARE meant for self-hosted runners:
+      # the app repository that calls the action picks `runs-on`, and that repository stays private.
+      - name: No self-hosted runners in this repository
+        run: |
+          # Matches `runs-on: [self-hosted, ...]` and the list form `- self-hosted` under runs-on.
+          if grep -rnE '^[[:space:]]*(runs-on:.*|-[[:space:]]*)self-hosted' .github/workflows/; then
+            echo "::error::Workflows in this repository must run on GitHub-hosted runners only."
+            exit 1
+          fi
       - name: ShellCheck
         run: shellcheck -x bin/* lib/config.sh tests/run.sh
       - name: Skills have front matter

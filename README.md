@@ -157,6 +157,13 @@ tests/run.sh                                # end-to-end tests against a local f
 
 ## Security notes
 
+- **Self-hosted runners and public repositories.** This action runs inside *your* repository's job, on *your* runner. Making this repository public shares only its code, not your runner. Who may use the runner is set where the runner is registered:
+  - for an organisation runner: Settings → Actions → Runner groups → choose *Selected repositories* and leave *Allow public repositories* off;
+  - for a repository runner: keep that repository private.
+
+  A public repository whose workflows use a self-hosted runner lets anyone who opens a pull request run code on that machine. This repository's own CI uses GitHub-hosted runners only, and a CI check fails if a workflow here asks for `self-hosted`.
+- **Pin the action to a commit** (`uses: <owner>/ios-ota-server@<full sha>`), not a branch. A later change to this repository then cannot run on your Mac until you choose to update the pin.
+
 - Only devices in your tailnet can reach the page. The IPA files are not encrypted at rest on the NAS.
 - The config file is read as `KEY=value` lines and never executed. Unknown keys are an error.
 - CI runs ShellCheck, the tests, and a gitleaks scan of the whole history.
