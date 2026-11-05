@@ -14,9 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to a commit (v4.2.2); Dependabot proposes updates.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
+          # The job only reads the repository; don't leave the token in .git/config.
+          persist-credentials: false
       # Checks only this repository's own CI workflows (.github/workflows/ here).
       # This repository is meant to be public, and a public repository's workflows must never run on a
       # self-hosted runner: anyone could open a pull request that runs code on that machine.
