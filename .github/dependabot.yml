@@ -1,0 +1,9 @@
+# Keeps the actions this repository's own CI uses up to date. They are pinned to commits;
+# Dependabot opens a pull request with the new commit and its version in a comment.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
