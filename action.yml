@@ -54,6 +54,15 @@ runs:
         else
           echo "build=$("$GITHUB_ACTION_PATH/bin/ota-changed" --slug "$INPUT_SLUG" -- "${paths[@]}")" >> "$GITHUB_OUTPUT"
         fi
+    - name: Check setup
+      if: steps.changed.outputs.build == 'true'
+      shell: bash
+      env:
+        OTA_CONFIG: ${{ inputs.config }}
+      run: |
+        [[ -n "$OTA_CONFIG" ]] || unset OTA_CONFIG
+        # Fails in seconds with the broken layer named, instead of after a full archive.
+        "$GITHUB_ACTION_PATH/bin/ota-doctor" --skip-page
     - name: Build IPA
       id: build
       if: steps.changed.outputs.build == 'true'

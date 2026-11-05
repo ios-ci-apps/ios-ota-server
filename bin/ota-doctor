@@ -1,0 +1,214 @@
+#!/usr/bin/env bash
+# Checks the OTA setup layer by layer and says which layer is broken:
+# settings, upload to the NAS, signing on this Mac, and the install page.
+# Run it on the runner Mac as the runner user. Exits 1 if any check fails.
+#
+# Usage: ota-doctor [--config <file>] [--skip-upload] [--skip-signing] [--skip-page]
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/config.sh source-path=SCRIPTDIR/..
+source "$ROOT/lib/config.sh"
+
+skip_upload=false skip_signing=false skip_page=false
+while (($#)); do
+    case "$1" in
+        --config) export OTA_CONFIG="$2"; shift 2 ;;
+        --skip-upload) skip_upload=true; shift ;;
+        --skip-signing) skip_signing=true; shift ;;
+        --skip-page) skip_page=true; shift ;;
+        -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
+        *) echo "ota-doctor: unknown argument $1" >&2; exit 2 ;;
+    esac
+done
+
+failures=0 warnings=0
+ok()   { printf '  ✔ %s\n' "$1"; }
+fail() { printf '  ✘ %s\n' "$1"; [[ -n "${2:-}" ]] && printf '      → %s\n' "$2"; failures=$((failures + 1)); }
+warn() { printf '  ! %s\n' "$1"; [[ -n "${2:-}" ]] && printf '      → %s\n' "$2"; warnings=$((warnings + 1)); }
+skip() { printf '  - %s\n' "$1"; }
+section() { printf '\n%s\n' "$1"; }
+mode_of() { stat -f %Lp "$1" 2>/dev/null || stat -c %a "$1"; }
+owner_only() { [[ "$(mode_of "$1")" =~ 00$ ]]; }
+TS="see TROUBLESHOOTING.md"
+
+# ---------------------------------------------------------------- settings
+section "Settings"
+config_file="${OTA_CONFIG:-$HOME/.config/ios-ota/ota.conf}"
+if [[ -f "$config_file" ]]; then
+    ok "config file $config_file"
+    owner_only "$config_file" || warn "$config_file is readable by other users" "chmod 600 \"$config_file\""
+else
+    warn "no config file at $config_file; using environment variables only" \
+        "cp ota.conf.example \"$config_file\" (README, Runner Mac step 3)"
+fi
+if ! load_error="$( (ota_load_config) 2>&1 )"; then
+    fail "${load_error#ota: }"
+    printf '\n1 check failed: fix the settings first.\n'
+    exit 1
+fi
+ota_load_config
+
+if [[ -z "${OTA_BASE_URL:-}" ]]; then
+    fail "OTA_BASE_URL is not set" "the page's address, https://<nas>.<tailnet>.ts.net (README, NAS step 5)"
+elif [[ "$OTA_BASE_URL" != https://* ]]; then
+    fail "OTA_BASE_URL must start with https:// (iOS refuses OTA over http)"
+else
+    ok "OTA_BASE_URL $OTA_BASE_URL"
+fi
+if [[ -z "${OTA_RSYNC_DEST:-}" ]]; then
+    fail "OTA_RSYNC_DEST is not set" "for example ota-uploader@nas.local:/volume1/ios-ota/www"
+else
+    ok "OTA_RSYNC_DEST $OTA_RSYNC_DEST"
+fi
+[[ "$OTA_KEEP_VERSIONS" =~ ^[1-9][0-9]*$ ]] || fail "OTA_KEEP_VERSIONS must be a positive number"
+case "$OTA_EXPORT_METHOD" in
+    debugging|development) ok "export method $OTA_EXPORT_METHOD (development signing, works with a free team)" ;;
+    release-testing|ad-hoc) ok "export method $OTA_EXPORT_METHOD (Ad Hoc, paid team)" ;;
+    *) fail "OTA_EXPORT_METHOD '$OTA_EXPORT_METHOD' is not one of debugging, release-testing" ;;
+esac
+
+# ---------------------------------------------------------------- upload
+section "Upload to the NAS"
+if $skip_upload; then
+    skip "skipped (--skip-upload)"
+elif [[ -z "${OTA_RSYNC_DEST:-}" ]]; then
+    skip "skipped: OTA_RSYNC_DEST is not set"
+else
+    rsync_ok=true
+    if ! command -v "$OTA_RSYNC_BIN" > /dev/null 2>&1; then
+        fail "rsync not found at $OTA_RSYNC_BIN" "brew install rsync, as the user who owns Homebrew ($TS, Upload)"
+        rsync_ok=false
+    elif "$OTA_RSYNC_BIN" --version 2>&1 | grep -qi openrsync; then
+        fail "$OTA_RSYNC_BIN is openrsync, which lacks options the upload needs" \
+            "brew install rsync and set OTA_RSYNC_BIN=/opt/homebrew/bin/rsync"
+        rsync_ok=false
+    else
+        ok "rsync $("$OTA_RSYNC_BIN" --version 2>&1 | head -n 1 | sed 's/^rsync *//')"
+    fi
+
+    if [[ "$OTA_RSYNC_DEST" == rsync://* ]]; then
+        if [[ -z "${OTA_RSYNC_PASSWORD_FILE:-}" ]]; then
+            warn "rsync service without OTA_RSYNC_PASSWORD_FILE; the upload may ask for a password"
+        elif [[ ! -f "$OTA_RSYNC_PASSWORD_FILE" ]]; then
+            fail "OTA_RSYNC_PASSWORD_FILE $OTA_RSYNC_PASSWORD_FILE does not exist"; rsync_ok=false
+        elif ! owner_only "$OTA_RSYNC_PASSWORD_FILE"; then
+            fail "$OTA_RSYNC_PASSWORD_FILE is readable by other users (rsync refuses it)" "chmod 600 \"$OTA_RSYNC_PASSWORD_FILE\""
+            rsync_ok=false
+        fi
+    elif [[ "$OTA_RSYNC_DEST" == *:* ]]; then
+        if [[ -z "${OTA_SSH_KEY:-}" ]]; then
+            warn "no OTA_SSH_KEY; SSH will use the default keys of this user"
+        elif [[ ! -f "$OTA_SSH_KEY" ]]; then
+            fail "SSH key $OTA_SSH_KEY does not exist" "ssh-keygen -t ed25519 -f \"$OTA_SSH_KEY\" (README, Runner Mac step 2)"
+            rsync_ok=false
+        elif ! owner_only "$OTA_SSH_KEY"; then
+            fail "SSH key $OTA_SSH_KEY is readable by other users (ssh refuses it)" "chmod 600 \"$OTA_SSH_KEY\""
+            rsync_ok=false
+        else
+            ok "SSH key $OTA_SSH_KEY"
+        fi
+    fi
+
+    if $rsync_ok; then
+        # Write a small file and remove it again, the same way ota-publish uploads and prunes.
+        work="$(mktemp -d)"
+        probe=".ota-doctor-$$"
+        mkdir -p "$work/empty"
+        date > "$work/$probe"
+        dest="${OTA_RSYNC_DEST%/}"
+        if err="$(ota_rsync "$work/$probe" "$dest/" 2>&1)"; then
+            ok "can write to $dest"
+            ota_rsync --delete --include="/$probe" --exclude='*' "$work/empty/" "$dest/" > /dev/null 2>&1 \
+                || warn "could not remove the test file $probe from $dest; delete it by hand"
+        else
+            hint="$TS, Upload"
+            case "$err" in
+                *"Permission denied"*) hint="the NAS does not accept the SSH key; $TS (ssh-copy-id says Permission denied)" ;;
+                *"account system disabled"*) hint="the Synology rsync service refuses accounts; switch to SSH ($TS)" ;;
+                *"Could not resolve"*|*"Unknown host"*|*"Name or service not known"*) hint="the NAS name does not resolve; try its LAN IP address" ;;
+                *"timed out"*|*"Connection refused"*) hint="the NAS does not answer; is SSH enabled and is this Mac on the same network?" ;;
+            esac
+            fail "cannot write to $dest: $(printf '%s' "$err" | grep -v '^$' | tail -n 1)" "$hint"
+        fi
+        rm -rf "$work"
+    fi
+fi
+
+# ---------------------------------------------------------------- signing
+section "Signing on this Mac"
+if $skip_signing; then
+    skip "skipped (--skip-signing)"
+elif [[ "$(uname)" != Darwin ]]; then
+    skip "skipped: not macOS"
+else
+    if xcode="$(xcode-select -p 2> /dev/null)" && [[ -n "$xcode" ]]; then
+        ok "Xcode at $xcode"
+    else
+        fail "no Xcode selected" "install Xcode, then sudo xcode-select -s /Applications/Xcode.app"
+    fi
+
+    if [[ -z "${OTA_KEYCHAIN_PASSWORD_FILE:-}" ]]; then
+        warn "OTA_KEYCHAIN_PASSWORD_FILE is not set; CI builds can fail with errSecInternalComponent" \
+            "README, Runner Mac step 4"
+    elif err="$( (ota_unlock_keychain) 2>&1 )"; then
+        ok "keychain unlocks with $OTA_KEYCHAIN_PASSWORD_FILE"
+    else
+        fail "${err#ota: }" "$TS, Changing a password"
+    fi
+
+    identities="$(security find-identity -v -p codesigning 2> /dev/null | grep -E 'Apple (Development|Distribution)' || true)"
+    if [[ -z "$identities" ]]; then
+        fail "no Apple Development or Distribution signing identity for $(id -un)" \
+            "Xcode → Settings → Accounts as this user, then Run the app once ($TS, No Accounts)"
+    else
+        ok "signing identities: $(printf '%s\n' "$identities" | wc -l | tr -d ' ')"
+        # The team ID is the certificate subject's OU.
+        certs="$(mktemp -d)"
+        security find-certificate -a -c "Apple " -p 2> /dev/null \
+            | awk -v dir="$certs" '/BEGIN CERT/{n++} n{print > (dir "/" n ".pem")}'
+        teams="$(for f in "$certs"/*.pem; do
+            [[ -f "$f" ]] && openssl x509 -noout -subject -in "$f" 2> /dev/null \
+                | sed -n 's/.*OU *= *\([A-Z0-9]\{10\}\).*/\1/p'
+        done | sort -u | tr '\n' ' ')"
+        rm -rf "$certs"
+        teams="${teams% }"
+        [[ -n "$teams" ]] && ok "team IDs in the keychain: $teams"
+        if [[ -n "${OTA_TEAM_ID:-}" && " $teams " != *" $OTA_TEAM_ID "* ]]; then
+            fail "OTA_TEAM_ID $OTA_TEAM_ID has no certificate in this keychain" "$TS, Finding your team ID"
+        fi
+    fi
+
+    if defaults read com.apple.dt.Xcode DVTDeveloperAccountManagerAppleIDLists > /dev/null 2>&1; then
+        ok "Xcode has an Apple ID account"
+    else
+        warn "could not find an Apple ID in Xcode's settings for $(id -un)" \
+            "Xcode → Settings → Accounts; if builds say No Accounts, see $TS"
+    fi
+    skip "not checked: whether the iPhone already knows this user's certificate. If an OTA build closes at once, Run the app once from Xcode as $(id -un) ($TS)"
+fi
+
+# ---------------------------------------------------------------- page
+section "Install page"
+if $skip_page; then
+    skip "skipped (--skip-page)"
+elif [[ "${OTA_BASE_URL:-}" != https://* ]]; then
+    skip "skipped: no valid OTA_BASE_URL"
+else
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "${OTA_BASE_URL%/}/" 2> /dev/null)" || code=""
+    case "$code" in
+        200) ok "${OTA_BASE_URL%/}/ answers 200" ;;
+        403) fail "the page answers 403" "the web server cannot read the folder: give the http group read access ($TS)" ;;
+        404) warn "the page answers 404" "normal before the first publish; afterwards, check that the Web Station portal is port-based ($TS)" ;;
+        ""|000) warn "the page is not reachable from this machine" \
+            "normal when this Mac is not in the NAS's tailnet; open it on the iPhone with Tailscale on" ;;
+        *) warn "the page answers $code" ;;
+    esac
+fi
+
+printf '\n'
+if ((failures)); then
+    printf '%d check(s) failed, %d warning(s). Fix the ✘ lines first.\n' "$failures" "$warnings"
+    exit 1
+fi
+printf 'All checks passed (%d warning(s)).\n' "$warnings"

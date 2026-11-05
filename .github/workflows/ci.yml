@@ -21,6 +21,20 @@ jobs:
         run: shellcheck -x bin/* lib/config.sh tests/run.sh
       - name: action.yml parses
         run: python3 -c "import yaml; yaml.safe_load(open('action.yml'))"
+      - name: Skills have front matter
+        run: |
+          python3 - <<'PY'
+          import glob, sys, yaml
+          bad = []
+          for path in glob.glob(".claude/skills/*/SKILL.md"):
+              text = open(path).read()
+              parts = text.split("---", 2)
+              meta = yaml.safe_load(parts[1]) if text.startswith("---") and len(parts) == 3 else None
+              if not isinstance(meta, dict) or not meta.get("name") or not meta.get("description"):
+                  bad.append(path)
+          print("\n".join(bad) or "ok")
+          sys.exit(1 if bad else 0)
+          PY
       - name: Python syntax
         run: python3 -m py_compile lib/ota_tools.py
       - name: Tests

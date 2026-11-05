@@ -57,7 +57,9 @@ fi
 signing=(-allowProvisioningUpdates)
 [[ -n "${OTA_TEAM_ID:-}" ]] && signing+=("DEVELOPMENT_TEAM=$OTA_TEAM_ID")
 
+ota_unlock_keychain
 echo "ota: archiving $scheme ($configuration)" >&2
+trap 'echo "ota: build failed; for signing errors (No Accounts, errSecInternalComponent) see TROUBLESHOOTING.md" >&2' ERR
 xcodebuild archive "${container[@]}" -scheme "$scheme" -configuration "$configuration" \
     -destination 'generic/platform=iOS' -archivePath "$archive" "${signing[@]}" -quiet >&2
 

@@ -91,5 +91,41 @@ check "a commit missing from history builds" '[[ "$(changed --slug other -- apps
 check "ota-changed needs a path" '! changed --slug demo'
 check "a slug starting with a dot is refused" '! "$ROOT/bin/ota-publish" --ipa "$work/demo3.ipa" --slug ".hidden" 2> /dev/null'
 
+# Keychain unlock: a fake `security` records its arguments; the password must not reach the output.
+fakebin="$work/fakebin"
+mkdir -p "$fakebin"
+cat > "$fakebin/security" <<'FAKE'
+#!/usr/bin/env bash
+echo "$*" >> "$SECURITY_LOG"
+[[ "$3" == right-password ]]
+FAKE
+chmod +x "$fakebin/security"
+export SECURITY_LOG="$work/security.log"
+unlock() { PATH="$fakebin:$PATH" bash -c 'source "$1/lib/config.sh"; ota_unlock_keychain' _ "$ROOT"; }
+printf 'right-password\n' > "$work/kc.pw"; chmod 600 "$work/kc.pw"
+check "no setting, no unlock" 'OTA_KEYCHAIN_PASSWORD_FILE= unlock 2> /dev/null && [[ ! -e "$SECURITY_LOG" ]]'
+check "unlocks the given keychain" 'OTA_KEYCHAIN_PASSWORD_FILE="$work/kc.pw" OTA_KEYCHAIN=/k.db unlock > "$work/unlock.out" 2>&1 && grep -qx "unlock-keychain -p right-password /k.db" "$SECURITY_LOG"'
+check "the password is not printed" '! grep -q right-password "$work/unlock.out"'
+chmod 644 "$work/kc.pw"
+check "a password file others can read is refused" '! OTA_KEYCHAIN_PASSWORD_FILE="$work/kc.pw" unlock 2> "$work/err" && grep -q "chmod 600" "$work/err"'
+printf 'wrong\n' > "$work/kc.pw"; chmod 600 "$work/kc.pw"
+check "a wrong password fails clearly" '! OTA_KEYCHAIN_PASSWORD_FILE="$work/kc.pw" unlock 2> "$work/err" && grep -q "could not unlock" "$work/err" && ! grep -q wrong "$work/err"'
+check "the setting is accepted in ota.conf" 'printf "OTA_BASE_URL=https://x\nOTA_RSYNC_DEST=%s\nOTA_KEYCHAIN_PASSWORD_FILE=%s\n" "$site" "$work/kc.pw" > "$work/kc.conf" && OTA_CONFIG="$work/kc.conf" "$ROOT/bin/ota-publish" --ipa "$work/demo3.ipa" --slug demo > /dev/null'
+
+# ota-doctor: settings, upload and page checks (signing is skipped off macOS).
+doc_site="$work/doctor-site"; mkdir -p "$doc_site"
+printf 'OTA_BASE_URL=https://nas.example.ts.net\nOTA_RSYNC_DEST=%s\nOTA_RSYNC_BIN=rsync\n' "$doc_site" > "$work/doctor.conf"
+chmod 600 "$work/doctor.conf"
+doctor() { env -u OTA_KEYCHAIN_PASSWORD_FILE "$ROOT/bin/ota-doctor" --skip-page "$@"; }
+check "doctor passes on a good setup" 'doctor --config "$work/doctor.conf" > "$work/doc.out" && grep -q "All checks passed" "$work/doc.out"'
+check "doctor leaves no test file behind" '[[ -z "$(ls -A "$doc_site")" ]]'
+check "doctor fails on an http address" '! OTA_BASE_URL=http://x doctor --config "$work/doctor.conf" > "$work/doc.out" && grep -q "must start with https" "$work/doc.out"'
+check "doctor fails when the upload cannot write" '! OTA_RSYNC_DEST=/nonexistent/deep/site doctor --config "$work/doctor.conf" > "$work/doc.out" && grep -q "cannot write to" "$work/doc.out"'
+printf '#!/usr/bin/env bash\necho "openrsync: protocol version 29"\n' > "$fakebin/rsync"; chmod +x "$fakebin/rsync"
+check "doctor flags openrsync" '! OTA_RSYNC_BIN="$fakebin/rsync" doctor --config "$work/doctor.conf" > "$work/doc.out" && grep -q "is openrsync" "$work/doc.out"'
+touch "$work/id_test"; chmod 644 "$work/id_test"
+check "doctor flags an SSH key others can read" '! OTA_RSYNC_DEST="user@nas.invalid:/x" OTA_SSH_KEY="$work/id_test" doctor --config "$work/doctor.conf" > "$work/doc.out" && grep -q "readable by other users (ssh refuses it)" "$work/doc.out"'
+check "doctor reports an unknown setting" 'printf "OTA_NOPE=1\n" > "$work/nope.conf" && ! doctor --config "$work/nope.conf" > "$work/doc.out" && grep -q "unknown setting OTA_NOPE" "$work/doc.out"'
+
 if ((fails)); then echo "$fails test(s) failed"; exit 1; fi
 echo "all tests passed"
