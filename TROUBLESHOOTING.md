@@ -9,6 +9,7 @@ Problems met while setting this up, each with the message you see and the fix. S
 - [Build and signing (runner Mac)](#build-and-signing-runner-mac)
 - [Workflow](#workflow)
 - [On the iPhone](#on-the-iphone)
+- [Finding your team ID](#finding-your-team-id)
 
 ## Where each secret lives
 
@@ -125,8 +126,40 @@ The Mac runs one job at a time. It usually waits behind a long UI test run.
 **"Unable to install" after tapping Install**
 A free (personal) team's build may be refused for OTA installation. With the paid Apple Developer Program, set `OTA_EXPORT_METHOD=release-testing` (Ad Hoc) in `ota.conf` and rebuild.
 
+**The app installs but closes at once, with no crash report**
+The phone refused the signature before any app code ran, so there is no crash report under Analytics Data. To see why, connect the iPhone to a Mac, open Console, pick the phone, start streaming and filter for the app's name. The cause shows as:
+```
+amfid  .../<App>.app/<App> not valid: Error Domain=AppleMobileFileIntegrityError Code=-400
+SpringBoard  Bootstrapping failed ... "Launch failed." ... Launchd job spawn failed
+```
+Each macOS user signs with its own Apple Development certificate, even under the same Apple ID. The phone has not accepted the runner user's certificate yet.
+
+Fix it once: log in to the Mac **as the runner user**, open the project in Xcode, pick the iPhone (by cable, or over the network after *Connect via network*) and press Run. Xcode registers the device and sets up that certificate's profile. After that, OTA builds signed by the same certificate open.
+
+Do this again only if the runner user's certificate changes, for example after signing out of Xcode or a new Mac. App data is kept either way; never delete the app to fix this.
+
+On a paid team with Ad Hoc export (`OTA_EXPORT_METHOD=release-testing`), registering the device's UDID in the Apple Developer portal replaces this step.
+
 **Tapping Install does nothing**
 Open the page in Safari, not in an app's built-in browser, and check that Tailscale is on.
 
 **The app stops opening after 7 days**
 That is the free team's profile expiry, shown on the page. Rebuild (Run workflow), then install over the existing app. Never delete the app first, or its data is lost.
+
+## Finding your team ID
+
+`OTA_TEAM_ID` and Xcode's `DEVELOPMENT_TEAM` take a 10-character team ID. A free (personal) team has no Membership page on the Apple Developer site, so read it on the Mac:
+
+- **Xcode:** target → Build Settings → search `DEVELOPMENT_TEAM`, or Signing & Capabilities → Team.
+- **The signing certificate:** the `OU` field is the team ID.
+  ```bash
+  security find-certificate -c "Apple Development" -p | openssl x509 -noout -subject
+  ```
+- **An exported app's profile:**
+  ```bash
+  security cms -D -i <App>.app/embedded.mobileprovision | grep -A2 TeamIdentifier
+  ```
+
+`security find-identity -v -p codesigning` also prints a 10-character code in brackets, but that is the certificate's ID, not the team's.
+
+A paid team has its own, different team ID: Apple Developer → Account → Membership details. Switching to it can change the signing identity and the bundle ID prefix. Check before the first install whether the app keeps its data.
