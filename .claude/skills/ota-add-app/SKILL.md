@@ -23,6 +23,7 @@ Read these from the app repository, and ask only for what you cannot read:
   - If the repository already has a setup action that selects Xcode, reuse it before the OTA step (for example a local `./.github/actions/<setup>` action), so the archive uses the same Xcode as CI.
 - **Bundle IDs.** Each app needs its own bundle ID; two apps with the same one replace each other on the phone.
 - **Version keys.** If the project uses XcodeGen with an `info:` block, `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` must be set. Otherwise the app ships with no version, and the page lists it as `0-0-<sha>`.
+- **Team.** Which team signs each app: the project's own `DEVELOPMENT_TEAM`, otherwise the runner's `OTA_DEFAULT_TEAM_ID`. To sign one app with a different team, set `OTA_TEAM_ID` (and `OTA_EXPORT_METHOD` if needed) in the action step's `env`, per matrix entry for a monorepo. A bundle ID belongs to one team, so don't move an app between teams casually: the phone then needs a reinstall.
 - **Free team limits.** A free team allows 3 apps on a phone at a time and 10 new App IDs per 7 days. Say so when a monorepo adds more.
 
 ## 2. Files to add
