@@ -139,7 +139,7 @@ Run the action once per app with a matrix, giving each its `scheme` and `slug`. 
 
 ## Which team signs
 
-Each build logs `ota: signing with team <ID> (from <source>)`. The team is chosen in this order:
+Each build logs `ota: signing with team <ID> (from <source>)`, and the install page shows, for every version, the team that actually signed it and how (`Development` or `Ad Hoc`), read from the build's own provisioning profile. The team is chosen in this order:
 
 1. **`OTA_TEAM_ID`**: an explicit choice that wins over everything. Set it per app in the workflow (`env:` on the action's step, or a matrix field) to sign different apps with different teams.
 2. **The project's own team**: `DEVELOPMENT_TEAM` of the scheme's app target. OTA builds then use the same team as running the app from Xcode, so the two can install over each other on a phone.

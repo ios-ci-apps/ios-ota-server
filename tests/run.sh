@@ -16,11 +16,16 @@ check() {
 
 make_ipa() { # <out> <bundle id> <version> <build>
     python3 - "$@" <<'PY'
-import plistlib, sys, zipfile, datetime
+import os, plistlib, sys, zipfile, datetime
 out, bundle, version, build = sys.argv[1:]
 info = plistlib.dumps({"CFBundleIdentifier": bundle, "CFBundleShortVersionString": version,
                        "CFBundleVersion": build, "CFBundleDisplayName": "Demo <App>"})
-profile = b"\x30\x80garbage" + plistlib.dumps({"ExpirationDate": datetime.datetime(2030, 1, 2, 3, 4, 5)}) + b"\x00sig"
+kind = os.environ.get("FAKE_PROFILE", "development")
+body = {"ExpirationDate": datetime.datetime(2030, 1, 2, 3, 4, 5)}
+if kind != "none":
+    body.update({"TeamIdentifier": ["TEAM123456"], "TeamName": "Jane <Paid>", "ProvisionedDevices": ["00008110-0001"],
+                 "Entitlements": {"get-task-allow": kind == "development"}})
+profile = b"\x30\x80garbage" + plistlib.dumps(body) + b"\x00sig"
 with zipfile.ZipFile(out, "w") as z:
     z.writestr("Payload/Demo.app/Info.plist", info)
     z.writestr("Payload/Demo.app/embedded.mobileprovision", profile)
@@ -141,6 +146,17 @@ check "an app target without a team reads as none" '[[ -z "$(printf "%s" "[{\"bu
 check "unreadable build settings read as none" '[[ -z "$(echo "xcodebuild: error" | python3 "$ROOT/lib/ota_tools.py" project-team)" ]]'
 check "OTA_DEFAULT_TEAM_ID is accepted in ota.conf" 'printf "OTA_BASE_URL=https://x\nOTA_RSYNC_DEST=%s\nOTA_DEFAULT_TEAM_ID=ABCDE12345\n" "$site" > "$work/team.conf" && OTA_CONFIG="$work/team.conf" "$ROOT/bin/ota-publish" --ipa "$work/demo3.ipa" --slug demo > /dev/null'
 check "Ad Hoc methods are recognised" 'bash -c "source \"$ROOT/lib/config.sh\"; OTA_EXPORT_METHOD=release-testing ota_is_adhoc_method && OTA_EXPORT_METHOD=ad-hoc ota_is_adhoc_method && ! OTA_EXPORT_METHOD=debugging ota_is_adhoc_method"'
+
+# The page shows which team signed each build, read from the build's own profile.
+sign_site="$work/sign-site"; mkdir -p "$sign_site"
+FAKE_PROFILE=adhoc make_ipa "$work/adhoc.ipa" com.example.adhoc 1.0 1
+OTA_RSYNC_DEST="$sign_site" "$ROOT/bin/ota-publish" --ipa "$work/adhoc.ipa" --slug adhoc --sha aaaaaaa000 > /dev/null
+FAKE_PROFILE=none make_ipa "$work/noteam.ipa" com.example.noteam 1.0 1
+OTA_RSYNC_DEST="$sign_site" "$ROOT/bin/ota-publish" --ipa "$work/noteam.ipa" --slug noteam --sha bbbbbbb000 > /dev/null
+check "meta records the signing team and kind" 'grep -q "\"teamId\": \"TEAM123456\"" "$sign_site/adhoc/1.0-1-aaaaaaa/meta.json" && grep -q "\"signing\": \"Ad Hoc\"" "$sign_site/adhoc/1.0-1-aaaaaaa/meta.json"'
+check "the page shows team, escaped name and kind" 'grep -q "team <code>TEAM123456</code> (Jane &lt;Paid&gt;) · Ad Hoc" "$sign_site/index.html"'
+check "a development profile is labelled Development" 'grep -q "\"signing\": \"Development\"" "$site/demo/1.0-3-abcdef3/meta.json"'
+check "a build without team shows no team and no None" '! grep -q "None" "$sign_site/index.html" && [[ "$(grep -o "team <code>" "$sign_site/index.html" | wc -l)" -eq 1 ]]'
 
 if ((fails)); then echo "$fails test(s) failed"; exit 1; fi
 echo "all tests passed"
