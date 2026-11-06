@@ -137,6 +137,16 @@ Run the action once per app with a matrix, giving each its `scheme` and `slug`. 
 - **`force: true`** rebuilds anyway. The example sets it on manual runs, so *Run workflow* renews every app.
 - Every app needs its own bundle identifier. With a free team, a device holds at most 3 such apps at a time.
 
+## Which team signs
+
+Each build logs `ota: signing with team <ID> (from <source>)`. The team is chosen in this order:
+
+1. **`OTA_TEAM_ID`**: an explicit choice that wins over everything. Set it per app in the workflow (`env:` on the action's step, or a matrix field) to sign different apps with different teams.
+2. **The project's own team**: `DEVELOPMENT_TEAM` of the scheme's app target. OTA builds then use the same team as running the app from Xcode, so the two can install over each other on a phone.
+3. **`OTA_DEFAULT_TEAM_ID`** in `ota.conf`: the runner's default, for projects that leave the team out of the repository.
+
+`OTA_EXPORT_METHOD` can be set per app the same way. Ad Hoc (`release-testing`) needs a paid team with an Apple Distribution certificate on the runner; if it fails, the build stops instead of shipping a development-signed app. `bin/ota-doctor` checks that each team setting has a certificate in the keychain.
+
 ## Commands
 
 ```bash
@@ -159,7 +169,8 @@ tests/run.sh                                # end-to-end tests against a local f
 | `OTA_SSH_KEY`, `OTA_SSH_PORT` | | `22` | SSH destination only |
 | `OTA_RSYNC_BIN` | | `rsync` | for example `/opt/homebrew/bin/rsync` |
 | `OTA_KEEP_VERSIONS` | | `10` | versions kept per app |
-| `OTA_TEAM_ID` | | project setting | Apple team that signs |
+| `OTA_DEFAULT_TEAM_ID` | | | team for projects that name no team of their own |
+| `OTA_TEAM_ID` | | | explicit team for every app, over the project's own; usually set per app in a workflow's `env` |
 | `OTA_EXPORT_METHOD` | | `debugging` | `release-testing` for Ad Hoc |
 | `OTA_PROFILE_DAYS` | | `7` | expiry shown when the IPA has no profile |
 | `OTA_KEYCHAIN_PASSWORD_FILE` | | | file with the runner user's login password (chmod 600); unlocks the keychain before each build |

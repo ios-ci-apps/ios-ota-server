@@ -127,5 +127,20 @@ touch "$work/id_test"; chmod 644 "$work/id_test"
 check "doctor flags an SSH key others can read" '! OTA_RSYNC_DEST="user@nas.invalid:/x" OTA_SSH_KEY="$work/id_test" doctor --config "$work/doctor.conf" > "$work/doc.out" && grep -q "readable by other users (ssh refuses it)" "$work/doc.out"'
 check "doctor reports an unknown setting" 'printf "OTA_NOPE=1\n" > "$work/nope.conf" && ! doctor --config "$work/nope.conf" > "$work/doc.out" && grep -q "unknown setting OTA_NOPE" "$work/doc.out"'
 
+# Team precedence: OTA_TEAM_ID, then the project's team, then OTA_DEFAULT_TEAM_ID.
+team_of() { # <OTA_TEAM_ID> <OTA_DEFAULT_TEAM_ID> <project team>
+    OTA_TEAM_ID="$1" OTA_DEFAULT_TEAM_ID="$2" bash -c 'source "$1/lib/config.sh"; ota_resolve_team "$2"; echo "$OTA_SIGN_TEAM $OTA_SIGN_TEAM_SOURCE"' _ "$ROOT" "$3"
+}
+check "OTA_TEAM_ID wins over the project" '[[ "$(team_of OVERRIDE00 DEFAULT000 PROJECT000)" == "OVERRIDE00 OTA_TEAM_ID" ]]'
+check "the project wins over the default" '[[ "$(team_of "" DEFAULT000 PROJECT000)" == "PROJECT000 project" ]]'
+check "the default applies when the project names no team" '[[ "$(team_of "" DEFAULT000 "")" == "DEFAULT000 OTA_DEFAULT_TEAM_ID" ]]'
+check "no team anywhere leaves it to Xcode" '[[ "$(team_of "" "" "")" == " none" ]]'
+export build_settings='[{"target":"Widgets","buildSettings":{"WRAPPER_EXTENSION":"appex","DEVELOPMENT_TEAM":"WIDGETTEAM"}},{"target":"App","buildSettings":{"WRAPPER_EXTENSION":"app","DEVELOPMENT_TEAM":"APPTEAM001"}}]'
+check "the app target's team is read, not an extension's" '[[ "$(printf "%s" "$build_settings" | python3 "$ROOT/lib/ota_tools.py" project-team)" == APPTEAM001 ]]'
+check "an app target without a team reads as none" '[[ -z "$(printf "%s" "[{\"buildSettings\":{\"WRAPPER_EXTENSION\":\"app\",\"DEVELOPMENT_TEAM\":\"\"}}]" | python3 "$ROOT/lib/ota_tools.py" project-team)" ]]'
+check "unreadable build settings read as none" '[[ -z "$(echo "xcodebuild: error" | python3 "$ROOT/lib/ota_tools.py" project-team)" ]]'
+check "OTA_DEFAULT_TEAM_ID is accepted in ota.conf" 'printf "OTA_BASE_URL=https://x\nOTA_RSYNC_DEST=%s\nOTA_DEFAULT_TEAM_ID=ABCDE12345\n" "$site" > "$work/team.conf" && OTA_CONFIG="$work/team.conf" "$ROOT/bin/ota-publish" --ipa "$work/demo3.ipa" --slug demo > /dev/null'
+check "Ad Hoc methods are recognised" 'bash -c "source \"$ROOT/lib/config.sh\"; OTA_EXPORT_METHOD=release-testing ota_is_adhoc_method && OTA_EXPORT_METHOD=ad-hoc ota_is_adhoc_method && ! OTA_EXPORT_METHOD=debugging ota_is_adhoc_method"'
+
 if ((fails)); then echo "$fails test(s) failed"; exit 1; fi
 echo "all tests passed"

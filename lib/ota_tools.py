@@ -152,6 +152,23 @@ def cmd_latest_sha(args: argparse.Namespace) -> None:
         print(versions[0].get("sha", ""))
 
 
+def cmd_project_team(args: argparse.Namespace) -> None:
+    """Print DEVELOPMENT_TEAM of the app target in `xcodebuild -showBuildSettings -json` output (stdin)."""
+    try:
+        targets = json.load(sys.stdin)
+    except json.JSONDecodeError:
+        return
+    apps = [
+        t for t in targets
+        if isinstance(t, dict) and t.get("buildSettings", {}).get("WRAPPER_EXTENSION") == "app"
+    ]
+    for target in apps or targets[:1]:
+        team = target.get("buildSettings", {}).get("DEVELOPMENT_TEAM", "").strip()
+        if team:
+            print(team)
+            return
+
+
 def install_link(base: str, rel_dir: str) -> str:
     manifest_url = f"{base}/{rel_dir}/manifest.plist"
     return "itms-services://?action=download-manifest&url=" + urllib.parse.quote(manifest_url, safe="")
@@ -232,6 +249,9 @@ def main() -> None:
     prune.add_argument("--root", required=True)
     prune.add_argument("--keep", type=int, required=True)
     prune.set_defaults(func=cmd_prune)
+
+    team = sub.add_parser("project-team", help="read the app target's DEVELOPMENT_TEAM from -showBuildSettings -json")
+    team.set_defaults(func=cmd_project_team)
 
     latest = sub.add_parser("latest-sha", help="print the commit of an app's newest published version")
     latest.add_argument("--root", required=True)
