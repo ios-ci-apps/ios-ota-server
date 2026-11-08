@@ -3,7 +3,7 @@
 # then ~/.config/ios-ota/ota.conf. Nothing host- or account-specific lives in the repository.
 
 OTA_KNOWN_KEYS=(OTA_BASE_URL OTA_RSYNC_DEST OTA_RSYNC_BIN OTA_RSYNC_PASSWORD_FILE OTA_SSH_KEY OTA_SSH_PORT
-    OTA_KEEP_VERSIONS OTA_TEAM_ID OTA_EXPORT_METHOD OTA_PROFILE_DAYS OTA_KEYCHAIN_PASSWORD_FILE OTA_KEYCHAIN)
+    OTA_KEEP_VERSIONS OTA_TEAM_ID OTA_DEFAULT_TEAM_ID OTA_EXPORT_METHOD OTA_PROFILE_DAYS OTA_KEYCHAIN_PASSWORD_FILE OTA_KEYCHAIN)
 
 ota_die() {
     echo "ota: $*" >&2
@@ -82,4 +82,28 @@ ota_unlock_keychain() {
     security unlock-keychain -p "$password" "$keychain" > /dev/null 2>&1 \
         || ota_die "could not unlock $keychain; check the password in $file (TROUBLESHOOTING.md: Changing a password)"
     echo "ota: unlocked $(basename "$keychain")" >&2
+}
+
+# Picks the team that signs a build, and says where it came from. Order:
+#   1. OTA_TEAM_ID          an explicit choice (a workflow's env, or ota.conf); wins over everything
+#   2. the project's team   DEVELOPMENT_TEAM of the scheme's app target ($1, may be empty)
+#   3. OTA_DEFAULT_TEAM_ID  the runner's default, for projects that name no team
+# Sets OTA_SIGN_TEAM (empty: Xcode decides) and OTA_SIGN_TEAM_SOURCE.
+ota_resolve_team() {
+    local project_team="${1:-}"
+    if [[ -n "${OTA_TEAM_ID:-}" ]]; then
+        OTA_SIGN_TEAM="$OTA_TEAM_ID" OTA_SIGN_TEAM_SOURCE="OTA_TEAM_ID"
+    elif [[ -n "$project_team" ]]; then
+        OTA_SIGN_TEAM="$project_team" OTA_SIGN_TEAM_SOURCE="project"
+    elif [[ -n "${OTA_DEFAULT_TEAM_ID:-}" ]]; then
+        OTA_SIGN_TEAM="$OTA_DEFAULT_TEAM_ID" OTA_SIGN_TEAM_SOURCE="OTA_DEFAULT_TEAM_ID"
+    else
+        OTA_SIGN_TEAM="" OTA_SIGN_TEAM_SOURCE="none"
+    fi
+    export OTA_SIGN_TEAM OTA_SIGN_TEAM_SOURCE
+}
+
+# Ad Hoc needs a paid team's distribution signing; it must never fall back to a development-signed app.
+ota_is_adhoc_method() {
+    [[ "${OTA_EXPORT_METHOD:-}" == release-testing || "${OTA_EXPORT_METHOD:-}" == ad-hoc ]]
 }
