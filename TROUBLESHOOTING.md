@@ -148,6 +148,16 @@ Open the page in Safari, not in an app's built-in browser, and check that Tailsc
 **The app stops opening after 7 days**
 That is the free team's profile expiry, shown on the page. Rebuild (Run workflow), then install over the existing app. Never delete the app first, or its data is lost.
 
+## Which team signed this build?
+
+The build log says it: `ota: signing with team <ID> (from OTA_TEAM_ID | project | OTA_DEFAULT_TEAM_ID)`. If it is not the team you expected:
+- `from OTA_TEAM_ID`: an explicit team is set in the workflow's `env` or in `ota.conf`, and it overrides the project.
+- `from project`: the project names its own team (`DEVELOPMENT_TEAM` in `project.yml`, an `.xcconfig`, or a gitignored local `.xcconfig` on the runner). Change it there.
+- `from OTA_DEFAULT_TEAM_ID`: the project names no team, so the runner's default was used.
+
+**`Ad Hoc export (release-testing) failed for team ...`**
+Ad Hoc needs a paid team, and an Apple Distribution certificate for it in the runner user's keychain (Xcode → Settings → Accounts → Manage Certificates). The device must be registered in that team. Use `OTA_EXPORT_METHOD=debugging` for a free team.
+
 ## Finding your team ID
 
 `OTA_TEAM_ID` and Xcode's `DEVELOPMENT_TEAM` take a 10-character team ID. A free (personal) team has no Membership page on the Apple Developer site, so read it on the Mac:

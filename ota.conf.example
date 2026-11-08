@@ -24,11 +24,18 @@ OTA_RSYNC_BIN=/opt/homebrew/bin/rsync
 # Versions kept per app on the server.
 OTA_KEEP_VERSIONS=10
 
-# Apple team that signs the build. Leave empty to use the project's DEVELOPMENT_TEAM.
+# Team that signs a build, in this order:
+#   1. OTA_TEAM_ID          explicit: signs every app, whatever its project says. Usually set per
+#                           app in a workflow's env instead of here.
+#   2. the project's own    DEVELOPMENT_TEAM of the scheme's app target.
+#   3. OTA_DEFAULT_TEAM_ID  this runner's default, for projects that name no team.
+# Most setups only need OTA_DEFAULT_TEAM_ID (README, "Which team signs").
+#OTA_DEFAULT_TEAM_ID=
 #OTA_TEAM_ID=
 
 # Export method: debugging (development profile, works with a free team) or
-# release-testing (Ad Hoc, paid Apple Developer Program).
+# release-testing (Ad Hoc, paid Apple Developer Program). An Ad Hoc export that fails stops the
+# build; it never falls back to a development-signed app. Can be set per app in a workflow's env.
 OTA_EXPORT_METHOD=debugging
 
 # Unlock the signing keychain before each build. A runner service can find the login keychain

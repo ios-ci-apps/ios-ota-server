@@ -54,8 +54,23 @@ if [[ -n "$workspace" ]]; then container=(-workspace "$workspace")
 elif [[ -n "$project" ]]; then container=(-project "$project")
 fi
 
+# The project's own team counts only when no explicit OTA_TEAM_ID is set, so only ask Xcode then.
+project_team=""
+if [[ -z "${OTA_TEAM_ID:-}" ]]; then
+    project_team="$(xcodebuild -showBuildSettings -json "${container[@]}" -scheme "$scheme" \
+        -configuration "$configuration" -destination 'generic/platform=iOS' 2> /dev/null \
+        | python3 "$ROOT/lib/ota_tools.py" project-team || true)"
+fi
+ota_resolve_team "$project_team"
 signing=(-allowProvisioningUpdates)
-[[ -n "${OTA_TEAM_ID:-}" ]] && signing+=("DEVELOPMENT_TEAM=$OTA_TEAM_ID")
+if [[ -n "$OTA_SIGN_TEAM" ]]; then
+    echo "ota: signing with team $OTA_SIGN_TEAM (from $OTA_SIGN_TEAM_SOURCE)" >&2
+    # Passed on the command line only when it isn't the project's own, so every target keeps
+    # the project's settings when the project decides.
+    [[ "$OTA_SIGN_TEAM_SOURCE" == project ]] || signing+=("DEVELOPMENT_TEAM=$OTA_SIGN_TEAM")
+else
+    echo "ota: no team from OTA_TEAM_ID, the project or OTA_DEFAULT_TEAM_ID; Xcode decides" >&2
+fi
 
 ota_unlock_keychain
 echo "ota: archiving $scheme ($configuration)" >&2
@@ -64,13 +79,18 @@ xcodebuild archive "${container[@]}" -scheme "$scheme" -configuration "$configur
     -destination 'generic/platform=iOS' -archivePath "$archive" "${signing[@]}" -quiet >&2
 
 options="$output/ExportOptions.plist"
-sed -e "s|__METHOD__|$OTA_EXPORT_METHOD|" -e "s|__TEAM_ID__|${OTA_TEAM_ID:-}|" \
+sed -e "s|__METHOD__|$OTA_EXPORT_METHOD|" -e "s|__TEAM_ID__|$OTA_SIGN_TEAM|" \
     "$ROOT/templates/ExportOptions.plist" > "$options"
-[[ -n "${OTA_TEAM_ID:-}" ]] || /usr/libexec/PlistBuddy -c 'Delete :teamID' "$options"
+[[ -n "$OTA_SIGN_TEAM" ]] || /usr/libexec/PlistBuddy -c 'Delete :teamID' "$options"
 
 echo "ota: exporting IPA (method $OTA_EXPORT_METHOD)" >&2
 if ! xcodebuild -exportArchive -archivePath "$archive" -exportPath "$export_dir" \
     -exportOptionsPlist "$options" -allowProvisioningUpdates -quiet >&2; then
+    # Ad Hoc must stay Ad Hoc: packaging the archive would give a development-signed app that
+    # only devices registered for development can open, and nothing would say so.
+    if ota_is_adhoc_method; then
+        ota_die "Ad Hoc export ($OTA_EXPORT_METHOD) failed for team ${OTA_SIGN_TEAM:-?} (from $OTA_SIGN_TEAM_SOURCE). It needs a paid team with an Apple Distribution certificate on this Mac; see TROUBLESHOOTING.md"
+    fi
     # A free (personal) team may refuse to export. The archived app is already signed with the
     # development profile that lists the registered devices, so package it as an IPA directly.
     echo "ota: export failed; packaging the archived app instead" >&2

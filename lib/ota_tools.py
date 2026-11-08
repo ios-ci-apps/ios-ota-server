@@ -37,35 +37,54 @@ def read_ipa(ipa_path: Path) -> dict:
             fail(f"{ipa_path} has no Payload/<App>.app/Info.plist")
         info = plistlib.loads(ipa.read(info_name))
         app_dir = info_name.rsplit("/", 1)[0]
-        expires_at = None
+        profile = {}
         profile_name = f"{app_dir}/embedded.mobileprovision"
         if profile_name in names:
-            expires_at = profile_expiry(ipa.read(profile_name))
+            profile = profile_info(ipa.read(profile_name))
     return {
         "bundleId": info["CFBundleIdentifier"],
         "version": str(info.get("CFBundleShortVersionString", "0")),
         "build": str(info.get("CFBundleVersion", "0")),
         "name": info.get("CFBundleDisplayName") or info.get("CFBundleName") or "App",
-        "expiresAt": expires_at,
+        "expiresAt": profile.get("expiresAt"),
+        "teamId": profile.get("teamId"),
+        "teamName": profile.get("teamName"),
+        "signing": profile.get("signing"),
     }
 
 
-def profile_expiry(data: bytes) -> str | None:
-    """The profile is a signed CMS blob with an XML plist inside; cut the plist out instead of verifying it."""
+def profile_info(data: bytes) -> dict:
+    """Expiry, team and kind of the embedded profile, which is what the build was really signed with.
+
+    The profile is a signed CMS blob with an XML plist inside; cut the plist out instead of verifying it.
+    """
     start = data.find(b"<?xml")
     end = data.find(b"</plist>")
     if start < 0 or end < 0:
-        return None
+        return {}
     try:
         profile = plistlib.loads(data[start : end + len(b"</plist>")])
     except Exception:
-        return None
+        return {}
+    info: dict = {}
     expiry = profile.get("ExpirationDate")
     if isinstance(expiry, dt.datetime):
         if expiry.tzinfo is None:
             expiry = expiry.replace(tzinfo=dt.timezone.utc)
-        return iso(expiry)
-    return None
+        info["expiresAt"] = iso(expiry)
+    teams = profile.get("TeamIdentifier") or []
+    if teams:
+        info["teamId"] = str(teams[0])
+    if profile.get("TeamName"):
+        info["teamName"] = str(profile["TeamName"])
+    entitlements = profile.get("Entitlements") or {}
+    if profile.get("ProvisionsAllDevices"):
+        info["signing"] = "Enterprise"
+    elif entitlements.get("get-task-allow"):
+        info["signing"] = "Development"
+    elif profile.get("ProvisionedDevices"):
+        info["signing"] = "Ad Hoc"
+    return info
 
 
 def iso(moment: dt.datetime) -> str:
@@ -152,9 +171,38 @@ def cmd_latest_sha(args: argparse.Namespace) -> None:
         print(versions[0].get("sha", ""))
 
 
+def cmd_project_team(args: argparse.Namespace) -> None:
+    """Print DEVELOPMENT_TEAM of the app target in `xcodebuild -showBuildSettings -json` output (stdin)."""
+    try:
+        targets = json.load(sys.stdin)
+    except json.JSONDecodeError:
+        return
+    apps = [
+        t for t in targets
+        if isinstance(t, dict) and t.get("buildSettings", {}).get("WRAPPER_EXTENSION") == "app"
+    ]
+    for target in apps or targets[:1]:
+        team = target.get("buildSettings", {}).get("DEVELOPMENT_TEAM", "").strip()
+        if team:
+            print(team)
+            return
+
+
 def install_link(base: str, rel_dir: str) -> str:
     manifest_url = f"{base}/{rel_dir}/manifest.plist"
     return "itms-services://?action=download-manifest&url=" + urllib.parse.quote(manifest_url, safe="")
+
+
+def signed_by(esc: dict) -> str:
+    """'· team <ID> (<name>) · <kind>' for the page; empty for builds published before this was recorded."""
+    if not esc.get("teamId"):
+        return ""
+    text = f' · team <code>{esc["teamId"]}</code>'
+    if esc.get("teamName"):
+        text += f' ({esc["teamName"]})'
+    if esc.get("signing"):
+        text += f' · {esc["signing"]}'
+    return text
 
 
 def cmd_index(args: argparse.Namespace) -> None:
@@ -166,14 +214,15 @@ def cmd_index(args: argparse.Namespace) -> None:
         versions = apps[slug]
         rows = []
         for position, meta in enumerate(versions):
-            esc = {k: html.escape(str(v)) for k, v in meta.items()}
+            esc = {k: html.escape(str(v)) for k, v in meta.items() if v is not None}
             expired = meta.get("expiresAt", "") < iso(now)
             status = '<span class="bad">expired</span>' if expired else f"expires {esc.get('expiresAt', '')[:10]}"
             label = "Install" if position == 0 else "Install this version"
             rows.append(
                 f'<li class="{"latest" if position == 0 else "old"}">'
                 f'<div><strong>{esc["version"]} ({esc["build"]})</strong> '
-                f'<code>{esc["sha"][:7]}</code><br><small>built {esc["builtAt"][:16].replace("T", " ")} UTC · {status}</small></div>'
+                f'<code>{esc["sha"][:7]}</code><br><small>built {esc["builtAt"][:16].replace("T", " ")} UTC · {status}'
+                f'{signed_by(esc)}</small></div>'
                 f'<a class="btn" href="{html.escape(install_link(base, meta["dir"]))}">{label}</a></li>'
             )
         title = html.escape(versions[0].get("displayName", slug))
@@ -232,6 +281,9 @@ def main() -> None:
     prune.add_argument("--root", required=True)
     prune.add_argument("--keep", type=int, required=True)
     prune.set_defaults(func=cmd_prune)
+
+    team = sub.add_parser("project-team", help="read the app target's DEVELOPMENT_TEAM from -showBuildSettings -json")
+    team.set_defaults(func=cmd_project_team)
 
     latest = sub.add_parser("latest-sha", help="print the commit of an app's newest published version")
     latest.add_argument("--root", required=True)

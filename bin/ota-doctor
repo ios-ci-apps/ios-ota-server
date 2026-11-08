@@ -174,8 +174,25 @@ else
         rm -rf "$certs"
         teams="${teams% }"
         [[ -n "$teams" ]] && ok "team IDs in the keychain: $teams"
-        if [[ -n "${OTA_TEAM_ID:-}" && " $teams " != *" $OTA_TEAM_ID "* ]]; then
-            fail "OTA_TEAM_ID $OTA_TEAM_ID has no certificate in this keychain" "$TS, Finding your team ID"
+        for key in OTA_TEAM_ID OTA_DEFAULT_TEAM_ID; do
+            [[ -n "${!key:-}" ]] || continue
+            if [[ " $teams " == *" ${!key} "* ]]; then
+                ok "$key ${!key} has a certificate here"
+            else
+                fail "$key ${!key} has no certificate in this keychain" "$TS, Finding your team ID"
+            fi
+        done
+        if [[ -n "${OTA_TEAM_ID:-}" ]]; then
+            ok "team: OTA_TEAM_ID ${OTA_TEAM_ID} signs every app, whatever its project says"
+        elif [[ -n "${OTA_DEFAULT_TEAM_ID:-}" ]]; then
+            ok "team: each project's own; projects without one use OTA_DEFAULT_TEAM_ID ${OTA_DEFAULT_TEAM_ID}"
+        else
+            warn "no OTA_TEAM_ID or OTA_DEFAULT_TEAM_ID; a project that names no team will fail to sign" \
+                "set OTA_DEFAULT_TEAM_ID in ota.conf ($TS, Finding your team ID)"
+        fi
+        if ota_is_adhoc_method && ! printf '%s\n' "$identities" | grep -q 'Apple Distribution'; then
+            fail "export method $OTA_EXPORT_METHOD needs an Apple Distribution certificate, and this keychain has none" \
+                "a paid team creates it in Xcode → Settings → Accounts → Manage Certificates; or use OTA_EXPORT_METHOD=debugging"
         fi
     fi
 
