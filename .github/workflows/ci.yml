@@ -14,8 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # Pinned to a commit (v4.2.2); Dependabot proposes updates.
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      # Pinned to a commit (v7.0.1); Dependabot proposes updates.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           # The job only reads the repository; don't leave the token in .git/config.
